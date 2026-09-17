@@ -1,0 +1,24 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Syntax check (all sources)
+        run: python -m py_compile $(find src -name '*.py' -print)
+      - name: Install package without heavy deps (self-test needs none)
+        run: pip install -e . --no-deps
+      - name: Classifier + graft-format self-test (8/8 required)
+        run: phantom-eval --self-test

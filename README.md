@@ -5,6 +5,9 @@ No weight edits. No refusal-direction projection. Fully reversible.
 Ship megabytes, not checkpoints — unload the cache and the base model is
 byte-identical again.
 
+[![ci](https://github.com/lordx64/phantom-kv/actions/workflows/ci.yml/badge.svg)](https://github.com/lordx64/phantom-kv/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/lordx64/phantom-kv?include_prereleases)](https://github.com/lordx64/phantom-kv/releases)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![pytorch](https://img.shields.io/badge/pytorch-2.x-ee4c2c)
 ![transformers](https://img.shields.io/badge/transformers-%E2%89%A54.51-yellow)
@@ -163,6 +166,24 @@ directly comparable.
 - Zhou et al. 2025 — [Don't Say No](https://aclanthology.org/2025.findings-acl.1294.pdf);
   [RAID](https://arxiv.org/html/2510.13901v1) (jailbreak-side prior art)
 
+## FAQ
+
+**Why not just abliterate?** Abliteration (heretic) currently achieves lower
+residual refusals — and it edits weights: you ship a new checkpoint, redo it
+per quantization, and the change is permanent. phantom-kv targets the cases
+where base weights must stay byte-identical and intervention must be
+reversible per request.
+
+**Is v1 the product?** No — v1 is the *control arm*: the strongest hand-written
+prefill, cached. It exists to quantify what free text buys (40% of refusals at
+KL 0.37) so the learned arms (v2/v3) can be judged fairly.
+
+**Does it work on quantized or MoE models?** Nothing in the mechanism depends
+on weight format or architecture (no hook site, no weight math): the graft is
+trained against the exact served model and attends like ordinary context.
+That's the claim; cross-architecture measurement is on the roadmap — watch
+[`docs/TECHNIQUE.md`](docs/TECHNIQUE.md).
+
 ## License
 
-TBD.
+[MIT](LICENSE).

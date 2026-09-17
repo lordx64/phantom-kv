@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Technique & experimental record
+    url: https://github.com/lordx64/phantom-kv/blob/main/docs/TECHNIQUE.md
+    about: Read this first — methodology, results, threats to validity.
+  - name: Security report
+    url: https://github.com/lordx64/phantom-kv/security/advisories/new
+    about: Private vulnerability reporting (no public issue, please).

@@ -13,6 +13,7 @@ dependencies = [
 [project.scripts]
 phantom-eval = "phantom_kv.cli:main"
 phantom-graft = "phantom_kv.graft.cli:main"
+phantom-train = "phantom_kv.train.cli:main"
 
 [build-system]
 requires = ["hatchling"]

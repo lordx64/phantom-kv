@@ -7,51 +7,6 @@ import sys
 from pathlib import Path
 
 
-def _verify(out_path: str, k, v, prefill_text: str, model, tokenizer, device: str) -> int:
-    """Round-trip the artifact: bitwise tensor equality + probe-logit parity."""
-    import torch
-
-    from phantom_kv.graft.build import user_turn_suffix
-    from phantom_kv.graft.format import Graft, load_graft
-
-    loaded = load_graft(out_path)
-    bitwise = torch.equal(loaded.k, k.cpu()) and torch.equal(loaded.v, v.cpu())
-
-    probe_ids = tokenizer(
-        user_turn_suffix("Reply with exactly the word: ready"),
-        return_tensors="pt",
-        add_special_tokens=False,
-    ).input_ids.to(device)
-    n_slots, n_probe = k.shape[1], probe_ids.shape[1]
-    mask = torch.ones(1, n_slots + n_probe, dtype=torch.long, device=device)
-    with torch.no_grad():
-        in_mem = Graft(k=k, v=v, meta=loaded.meta, path=out_path)
-        logits_mem = model(
-            input_ids=probe_ids, past_key_values=in_mem.new_cache(), attention_mask=mask
-        ).logits.float()
-        on_disk = Graft(k=loaded.k.to(device), v=loaded.v.to(device),
-                        meta=loaded.meta, path=out_path)
-        logits_disk = model(
-            input_ids=probe_ids, past_key_values=on_disk.new_cache(), attention_mask=mask
-        ).logits.float()
-    roundtrip_diff = (logits_mem - logits_disk).abs().max().item()
-
-    # Informational: two-pass splice vs one single forward over the same tokens.
-    with torch.no_grad():
-        prefill_ids = tokenizer(
-            prefill_text, return_tensors="pt", add_special_tokens=False
-        ).input_ids.to(device)
-        one_pass = model(input_ids=torch.cat([prefill_ids, probe_ids], dim=1)).logits.float()
-    splice_diff = (logits_mem - one_pass[:, n_slots:]).abs().max().item()
-
-    print(f"[verify] bitwise tensor equality: {bitwise}")
-    print(f"[verify] round-trip max-abs logit diff (loaded vs in-memory cache): {roundtrip_diff:.3e}")
-    print(f"[verify] splice-vs-single-pass max-abs logit diff (informational, bf16): {splice_diff:.3e}")
-    ok = bitwise and roundtrip_diff <= 1e-3
-    print(f"[verify] {'PASS' if ok else 'FAIL'}")
-    return 0 if ok else 1
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(prog="phantom-graft", description="Build phantom-kv grafts.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -62,8 +17,6 @@ def main() -> None:
     bp.add_argument("--verify", action="store_true", help="round-trip the artifact after writing")
     args = parser.parse_args()
 
-    import torch
-
     from phantom_kv.graft.build import (
         assert_chat_template_compatible,
         build_prefill_kv,
@@ -72,6 +25,7 @@ def main() -> None:
         source_sha256_12,
     )
     from phantom_kv.graft.format import GRAFT_KIND, save_graft
+    from phantom_kv.graft.verify import verify_roundtrip
     from phantom_kv.model import load_model
 
     system, assistant_ack = load_prefill_source(args.source)
@@ -99,7 +53,11 @@ def main() -> None:
     )
 
     if args.verify:
-        sys.exit(_verify(args.out, k, v, prefill_text, model, tokenizer, info["device"]))
+        sys.exit(
+            verify_roundtrip(
+                args.out, k, v, model, tokenizer, info["device"], prefill_text=prefill_text
+            )
+        )
 
 
 if __name__ == "__main__":

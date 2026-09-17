@@ -7,7 +7,9 @@ import transformers
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase
 
 
-def load_model(model_id: str) -> tuple[torch.nn.Module, PreTrainedTokenizerBase, dict]:
+def load_model(
+    model_id: str, attn_implementation: str = "sdpa"
+) -> tuple[torch.nn.Module, PreTrainedTokenizerBase, dict]:
     """Load a causal LM on MPS when available, else CPU.
 
     bfloat16 is tried first; if the load or a one-step forward fails, the
@@ -25,7 +27,7 @@ def load_model(model_id: str) -> tuple[torch.nn.Module, PreTrainedTokenizerBase,
             model = AutoModelForCausalLM.from_pretrained(
                 model_id,
                 dtype=dtype,
-                attn_implementation="sdpa",
+                attn_implementation=attn_implementation,
             )
             model.to(device)
             model.eval()

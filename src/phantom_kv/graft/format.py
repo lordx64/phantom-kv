@@ -15,6 +15,8 @@ from pathlib import Path
 
 FORMAT_VERSION = 0
 GRAFT_KIND = "prefill_kv"
+SOFTPROMPT_KIND = "softprompt_kv"
+VALID_KINDS = (GRAFT_KIND, SOFTPROMPT_KIND)
 TENSOR_LAYOUT = "[n_layers, n_slots, n_kv_heads, head_dim]"
 
 _META_KEYS = (
@@ -47,8 +49,8 @@ def validate_graft(meta: dict, tensor_shapes: dict[str, tuple[int, ...]]) -> Non
             raise ValueError(f"graft metadata missing key {key!r}")
     if meta["format_version"] != FORMAT_VERSION:
         raise ValueError(f"unsupported graft format_version {meta['format_version']}")
-    if meta["kind"] != GRAFT_KIND:
-        raise ValueError(f"unknown graft kind {meta['kind']!r}; this build supports {GRAFT_KIND!r}")
+    if meta["kind"] not in VALID_KINDS:
+        raise ValueError(f"unknown graft kind {meta['kind']!r}; this build supports {VALID_KINDS!r}")
     if set(tensor_shapes) != {"k", "v"}:
         raise ValueError(f"graft tensors must be exactly 'k' and 'v', got {sorted(tensor_shapes)}")
     shape_k, shape_v = tensor_shapes["k"], tensor_shapes["v"]

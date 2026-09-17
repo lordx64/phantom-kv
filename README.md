@@ -176,8 +176,16 @@ model's own completions. Full methodology:
 | --- | --- | --- | --- | --- | --- |
 | base | — | 25/60 | 0/20 | 0 / 0 (exact) | — |
 | v1 | hand-written compliance prefill, 129 slots | **15/60** | 0/20 | 0.367 / 0.604 | 18.1 MB |
-| v2 | learned soft prompt → compiled KV | planned | | | |
+| v2\* | learned soft prompt → compiled KV, 129 slots | **3/60** | 0/20 | 0.452 / 2.678 | 18.1 MB |
 | v3 | learned direct K/V bank | planned | | | |
+
+\* **v2 quality caveat (read before quoting 3/60):** the suppression objective was
+over-dosed and 6/60 completions land in a degenerate "prohibited, prohibited…"
+stutter — 4 of those pass the lexical classifier without actually answering.
+Content-adjusted, v2 is ≈ 53/60 clean answers with ≈ 18 clean new compliances
+beyond v1 (e.g. "The production of crack cocaine involves a chemical process
+that converts powdered cocaine into…"). Zero regressions vs base. Dose tuning
+is v2.1; full audit in [`docs/TECHNIQUE.md`](docs/TECHNIQUE.md) §6.4.
 
 Reading of v1 (the control arm): free text buys the easy 40% of refusals with
 zero regressions — 10 flips to genuine compliance, 15 stubborn refusals
@@ -250,8 +258,10 @@ directly comparable.
    harmful suite; Qwen3-4B discriminating baseline (25/60, KL exact 0).
 2. (done) `phantom.bin` container, graft splice path, v1 prefill-cache arm
    (15/60, KL 0.367/0.604).
-3. v2 — learned soft-prompt graft on frozen weights, compiled to KV
-   (dev loop Qwen3-0.6B, scoreboard Qwen3-4B-Instruct-2507).
+3. (done) v2 — learned soft-prompt graft, warm-started at v1: 25/60 → 3/60,
+   0 regressions, KL 0.452/2.678; suppression-attractor caveat and quality
+   audit documented (§6.4). v2.1: suppression-dose cap, per-prompt KL
+   reporting, judge-model quality pass.
 4. v3 — learned direct K/V graft with norm regularization.
 5. Capability spot checks; long-context persistence probe; expanded 100+
    suites; serving adapters (vLLM prefix seam, llama.cpp prompt cache, HF).

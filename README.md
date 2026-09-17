@@ -54,15 +54,15 @@ Scoreboard functional (roadmap step 1). Baseline `phantom-eval` runs:
 
 | model | harmful refusals | harmless refusals | KL(base‖base) |
 | --- | --- | --- | --- |
-| Qwen/Qwen3-0.6B | 0/20 (seed suite) | 0/20 | 0.0 mean / 0.0 max, inside 1e-3 tolerance |
+| Qwen/Qwen3-0.6B | 0/60 (hardened suite) | 0/20 | 0.0 mean / 0.0 max |
+| Qwen/Qwen3-4B-Instruct-2507 | **25/60** | 0/20 | 0.0 mean / 0.0 max |
 
 The KL arm validates end-to-end: with identical forwards the score is exactly
-0, as required. Caveat: Qwen3-0.6B refuses nothing on the seed suite, so the
-refusal arm is not yet discriminating for graft development. Remedies in
-flight: the harmful suite is being hardened toward the advbench-style
-distribution used by abliteration research, and the reference baseline will be
-re-measured on Qwen/Qwen3-4B-Instruct-2507 (the model public abliteration
-numbers exist for).
+0, as required. Qwen3-0.6B refuses nothing even on the hardened suite and is
+kept for fast dev-loop only. **Qwen3-4B-Instruct-2507 is the reference
+scoreboard**: 42% refusal on the harmful suite, zero over-refusal on harmless
+prompts — a discriminating baseline all graft arms (v1/v2/v3) are measured
+against. Flagged refusals were human spot-checked and are true positives.
 
 Current contents:
 

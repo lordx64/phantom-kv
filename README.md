@@ -132,9 +132,18 @@ is ever read, identified, or assumed. Dense, MoE, or hybrid — if the model
 attends over past K/V, the same container format and the same splice apply.
 There is nothing to port.
 
-*Honest caveat:* measured so far on Qwen3 (dense). What transfers is the
-mechanism, not a codebase per family — cross-architecture confirmation is
-roadmap item 5, and we publish whatever we find.
+Two scopes to keep separate: the **toolchain is universal** (same training +
+eval code for any causal LM on Hugging Face), but each **trained graft is
+bound to one exact model revision** — K/V values are produced by that model's
+own weights, so a graft built for one model is meaningless for another, and
+the loader enforces the model-id match. Supporting a new model = retraining,
+which is automated and takes about an hour on a laptop. Serving a different
+quantization than you trained on: validate per quant lane (steering signals
+empirically survive quantization drift, but it's measured, not assumed).
+
+*Honest caveat:* deployed so far on Qwen3 (dense). Cross-architecture and
+cross-quantization confirmation is roadmap item 5, and we publish whatever we
+find.
 
 ### Why inference-engine-agnostic
 

@@ -51,12 +51,116 @@ projected out of any activation.
   phantom.bin (safetensors, ~MBs)
 ```
 
+## How it differs from existing tools
+
+All three tools remove refusal. They differ in **where** the intervention
+lives — and that choice decides everything else: permanence, runtime cost,
+per-architecture work, and what can go wrong.
+
+### heretic — surgery in *weight space*
+
+Heretic computes a per-layer "refusal direction" (difference-of-means between
+harmful and harmless prompt residuals) and **orthogonalizes weight matrices** —
+attention out-projections and MLP down-projections — so that direction can no
+longer be written into the residual stream. It ships a *modified checkpoint*.
+
+Consequences, by construction:
+
+- **Permanent.** Reverting means re-flashing the original weights; the
+  capability trade-off is baked into the checkpoint forever.
+- **Quantization-bound.** The edit is made against one weight file — quantize
+  afterwards, or switch quants, and the work must be redone.
+- **Architecture-aware.** It must identify *which matrices* express the
+  direction for each model family; its own support matrix varies (dense, some
+  MoE, some hybrid — pure state-space models unsupported).
+
+### weightless / GLP — surgery in *activation space*
+
+GLP keeps weights intact and moves the same direction to runtime: a boot-time
+vLLM hotfix subtracts `α·(h·d̂)d̂` from hidden states at a chosen write site,
+**on every layer, on every token, of every forward pass**.
+
+Consequences, by construction:
+
+- **Per-architecture hook-site mapping.** The correct subtraction point must
+  be found per model family — their own public field notes document shipping a
+  mislabeled site on DSV4 (the "post-layer residual" anchor was actually the
+  pending FFN write, before a hyper-connection fold).
+- **A runtime patch that must fail closed.** If the boot-time hook can't
+  apply, the endpoint must refuse to serve — the patch is part of the serving
+  critical path.
+- **Engine-bound.** vLLM hotfix, or their GGUF/GLP format extension for
+  llama.cpp; MoE explicitly requires the GGUF extension. Each engine is
+  separate integration work.
+
+### phantom-kv — *context space*: nothing is subtracted anywhere
+
+phantom-kv never locates a refusal direction and never removes anything from
+weights or activations. A trained bank of keys/values sits in the cache as
+phantom context, and the model's **own attention** does the steering — the
+same mechanism it uses for any instruction in any prompt. The forward pass is
+never intercepted; the signal path is never altered; the only influence
+channel is the input channel the model was built to consume.
+
+### What this buys
+
+- **No damage pathway through the math.** Orthogonalization and projection
+  *force* a change on every token's hidden states, whether or not it helps —
+  the KL cost is paid on all traffic. A graft's influence is **attention-gated**:
+  the model itself decides how strongly to weight it, per head, per token.
+  (We still measure KL on every run — additive context is not free, it just
+  fails softer.)
+- **No 1-D assumption.** Both baselines inherit the premise that refusal is
+  one removable direction. Where refusal is distributed across circuits, a
+  graft doesn't care — it is optimized end-to-end against *observed behavior*,
+  not against a geometric model of how refusal is implemented.
+- **No per-token hook, nothing to fail closed.** Runtime cost is attention
+  over N extra cache slots — indistinguishable from a slightly longer prompt.
+- **Dose as artifacts, not a runtime α.** Strength variants are separate
+  trained grafts, hot-swappable per request.
+
+### Why model-agnostic
+
+Both baselines must understand the body they operate on: heretic maps
+refusal-expressing **matrices** per architecture; GLP maps a correct runtime
+**hook site** per architecture (and got one publicly wrong). The graft
+interacts with neither — it lives in the **KV cache, the one interface every
+attention-based architecture exposes with the same shape**: per-layer K and V
+tensors. Training needs gradients with respect to cache tensors on a frozen
+model; nothing about layers, experts, hyper-connections, or state-space blocks
+is ever read, identified, or assumed. Dense, MoE, or hybrid — if the model
+attends over past K/V, the same container format and the same splice apply.
+There is nothing to port.
+
+*Honest caveat:* measured so far on Qwen3 (dense). What transfers is the
+mechanism, not a codebase per family — cross-architecture confirmation is
+roadmap item 5, and we publish whatever we find.
+
+### Why inference-engine-agnostic
+
+GLP ships *as an engine patch* (vLLM hotfix, or a GGUF extension for
+llama.cpp). The graft ships as **data** — tensors in a documented container —
+and every engine already has a delivery path for cache data:
+
+- **vLLM** — prefix-caching / KV-connector seam, no forward-pass hooks;
+- **HF transformers** — first-class `past_key_values` (what this repo uses);
+- **llama.cpp** — prompt-cache session files;
+- **any engine that can only build cache from tokens** — a hard-token
+  distilled variant degrades gracefully to a prefixed prompt.
+
+Worst case is a prompt; best case is a load-once cache block. Never an engine
+fork, never a boot patch, never a site map.
+
+### Summary
+
 | property | heretic (weights) | weightless / GLP (activations) | phantom-kv (cache) |
 | --- | --- | --- | --- |
 | base weights byte-identical | ✗ | ✓ | ✓ |
 | no refusal vector anywhere | ✗ | ✗ | ✓ |
+| assumes refusal ≈ one direction | ✓ | ✓ | ✗ |
+| per-architecture work | identify target matrices | map runtime hook site | none |
 | runtime cost | none (baked in) | per-token, per-layer projection hook | attention over N extra slots (≈ same-length prompt) |
-| serving changes | none | boot-time vLLM hotfix + per-architecture site mapping | load a cache file |
+| serving changes | none | boot-time vLLM hotfix | load a cache file |
 | quantization / MoE | redo per quantization | GGUF extension required for MoE | architecture-agnostic artifact path |
 | reversibility | new checkpoint | disable flag | unload blocks → byte-identical baseline |
 | dose control | none | runtime α scalar | hot-swappable per-request graft variants |

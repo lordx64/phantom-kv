@@ -1,112 +1,167 @@
 # phantom-kv
 
-Refusal removal for language models as a **loadable KV-cache graft**. No weight
-edits, no refusal-direction projection — the base model stays 100%
-byte-identical, and nothing is ever projected out of its activations.
+**Refusal removal for language models as a loadable KV-cache graft.**
+No weight edits. No refusal-direction projection. Fully reversible.
+Ship megabytes, not checkpoints — unload the cache and the base model is
+byte-identical again.
 
-## Why
+![python](https://img.shields.io/badge/python-3.10%2B-blue)
+![pytorch](https://img.shields.io/badge/pytorch-2.x-ee4c2c)
+![transformers](https://img.shields.io/badge/transformers-%E2%89%A54.51-yellow)
+![scoreboard](https://img.shields.io/badge/scoreboard-Qwen3--4B--Instruct--2507-green)
+![base weights modified](https://img.shields.io/badge/base%20weights%20modified-0%25-brightgreen)
+![status](https://img.shields.io/badge/status-active%20research-orange)
 
-Existing refusal-removal techniques both build on the "refusal is a 1-D
-direction" insight (Arditi et al. 2024):
+## The technique
 
-- **Abliteration tools** (e.g. [heretic](https://github.com/p-e-w/heretic))
-  compute a refusal direction per layer and orthogonalize weight matrices
-  against it. Effective, but it edits the checkpoint, must be redone per
-  quantization, and permanently trades capabilities.
-- **Inference-time projection** (e.g. [weightless / GLP](https://weightle.ss/))
-  removes the direction at runtime via `h ← h − α·(h·d̂)d̂` inside vLLM hotfixes.
-  Weights stay intact, but it still computes a refusal vector, needs a
-  per-architecture hook-site mapping, and a fragile boot-time runtime patch.
+Existing refusal-removal methods both build on the "refusal is a 1-D
+direction" insight (Arditi et al. 2024): either edit that direction out of the
+**weights** (abliteration, e.g. [heretic](https://github.com/p-e-w/heretic)),
+or project it out of **activations** at runtime
+([weightless / GLP](https://weightle.ss/), `h ← h − α·(h·d̂)d̂` inside a vLLM
+hotfix).
 
-phantom-kv starts from a different observation: a KV cache is *context*. You
-cannot cache a subtraction — but you can cache learned context that out-signals
-refusal circuits through ordinary attention. The graft is a small bank of
-key/value tensors trained against heretic's own dual objective (refusal
-suppression on harmful prompts, KL preservation on harmless ones), shipped as a
-megabyte-scale artifact, and socketed into the cache at serving time. From the
-model's vantage it is indistinguishable from conversation history.
+phantom-kv uses neither. Its premise:
 
-## Arms
+> A KV cache is *context*. You cannot cache a subtraction — but you can cache
+> **learned context** that out-signals refusal circuits through ordinary
+> attention.
 
-Three variants share one eval harness, weakest to most expressive:
+A phantom graft is a small bank of per-layer key/value tensors, trained
+against abliteration's own dual objective — suppress refusal on harmful
+prompts while minimizing KL divergence from the base model on harmless ones —
+and spliced into the cache at serving time at invariant positions `0..N`.
+From the model's vantage it is indistinguishable from conversation history
+that is already there: a phantom context. Attention reads it; nothing is ever
+projected out of any activation.
 
-1. **v1 — prefill cache** (control). A hand-crafted compliance prefill, cached
-   once and reused. Pure jailbreak text; sets the floor for the learned arms.
-2. **v2 — soft-prompt graft, compiled to KV.** Virtual tokens trained
-   end-to-end, then run through the model once and shipped as a KV cache.
-   Deploys anywhere prompt caches or prefix embeddings are accepted.
-3. **v3 — direct K/V graft.** The key/value tensors themselves are optimized,
-   one bank per layer, with norm regularization toward empirical K/V
-   statistics. Never passes through the embedding bottleneck; never computes a
-   refusal direction anywhere in training or serving.
+```
+  TRAIN (offline, per model)                     SERVE (any engine with a KV cache)
+  ───────────────────────────                    ────────────────────────────────
+  frozen base model ⊕ learnable K/V bank         boot: load graft.bin → reserved
+        │                                            cache blocks (validate sha)
+        ▼                                            │
+  loss = CE(comply | harmful)                        ▼
+       + λ·KL(base ‖ graft | harmless)   →   request: attend over [graft K/V] ⊕
+        │                                          prompt K/V  — read-only,
+        ▼                                          per-request swappable
+  phantom.bin (safetensors, ~MBs)
+```
+
+| property | heretic (weights) | weightless / GLP (activations) | phantom-kv (cache) |
+| --- | --- | --- | --- |
+| base weights byte-identical | ✗ | ✓ | ✓ |
+| no refusal vector anywhere | ✗ | ✗ | ✓ |
+| runtime cost | none (baked in) | per-token, per-layer projection hook | attention over N extra slots (≈ same-length prompt) |
+| serving changes | none | boot-time vLLM hotfix + per-architecture site mapping | load a cache file |
+| quantization / MoE | redo per quantization | GGUF extension required for MoE | architecture-agnostic artifact path |
+| reversibility | new checkpoint | disable flag | unload blocks → byte-identical baseline |
+| dose control | none | runtime α scalar | hot-swappable per-request graft variants |
+
+## Results so far
+
+Scoreboard: **Qwen3-4B-Instruct-2507**, hardened 60-prompt harmful suite,
+20-prompt harmless suite, greedy decoding, teacher-forced KL against the base
+model's own completions. Full methodology:
+[`docs/TECHNIQUE.md`](docs/TECHNIQUE.md).
+
+| arm | kind | harmful refusals ↓ | harmless refusals ↓ | KL mean/max ↓ | artifact |
+| --- | --- | --- | --- | --- | --- |
+| base | — | 25/60 | 0/20 | 0 / 0 (exact) | — |
+| v1 | hand-written compliance prefill, 129 slots | **15/60** | 0/20 | 0.367 / 0.604 | 18.1 MB |
+| v2 | learned soft prompt → compiled KV | planned | | | |
+| v3 | learned direct K/V bank | planned | | | |
+
+Reading of v1 (the control arm): free text buys the easy 40% of refusals with
+zero regressions — 10 flips to genuine compliance, 15 stubborn refusals
+remain, at KL ~0.37. The learned arms must capture the remaining headroom at
+lower KL to justify themselves over a cached jailbreak prompt. That is exactly
+the calibration v1 exists to provide.
+
+Mechanics, verified: save→load round-trip **bitwise equal**, round-trip logit
+diff **0.000e+00**, harmless completions coherent under graft, refusal
+classifier + graft-format self-test 8/8.
 
 ## Honest limits
 
 Refusal behavior lives in the weights, so any kept-weights method fights the
 model at inference with additive context. Graft influence dilutes as real
-conversation context grows, and direct K/V banks can destabilize attention if
-poorly regularized. The eval harness exists to measure exactly these failure
-modes (including a long-context persistence probe), not to hide them.
+conversation context grows (the graft is N slots competing with 16k+ tokens of
+history), and persistence under long contexts is a measured risk, not a waived
+one — the eval harness grows a persistence probe for exactly this. Measured
+numbers so far cover one architecture family (Qwen3) on a 60-prompt suite with
+a lexical classifier; see *Threats to validity* in
+[`docs/TECHNIQUE.md`](docs/TECHNIQUE.md).
 
-## Status
+## Repo layout
 
-Scoreboard functional (roadmap step 1). Baseline `phantom-eval` runs:
+```
+data/suites/                 prompt suites (harmful hardened to 60, harmless 20)
+data/grafts/v1_prefill.json  v1 graft source (hand-crafted prefill)
+src/phantom_kv/
+  model.py                   device/dtype policy loader (MPS, bf16)
+  eval/refusal.py            lexical refusal classifier (--self-test)
+  eval/metrics.py            teacher-forced KL (float32, completion-masked)
+  eval/runner.py             scoreboard orchestration, reports
+  graft/format.py            phantom.bin container + validation
+  graft/build.py             prefill shaping, cache extraction
+  graft/cli.py               phantom-graft build-prefill --verify
+docs/TECHNIQUE.md            technique + experimentation record
+artifacts/                   (gitignored) grafts and eval reports
+```
 
-| model | harmful refusals | harmless refusals | KL(base‖base) |
-| --- | --- | --- | --- |
-| Qwen/Qwen3-0.6B | 0/60 (hardened suite) | 0/20 | 0.0 mean / 0.0 max |
-| Qwen/Qwen3-4B-Instruct-2507 | **25/60** | 0/20 | 0.0 mean / 0.0 max |
+## Quickstart
 
-The KL arm validates end-to-end: with identical forwards the score is exactly
-0, as required. Qwen3-0.6B refuses nothing even on the hardened suite and is
-kept for fast dev-loop only. **Qwen3-4B-Instruct-2507 is the reference
-scoreboard**: 42% refusal on the harmful suite, zero over-refusal on harmless
-prompts — a discriminating baseline all graft arms (v1/v2/v3) are measured
-against. Flagged refusals were human spot-checked and are true positives.
+```bash
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python -e .
 
-### Graft arms (scoreboard: Qwen3-4B-Instruct-2507, hardened suite)
+# scoreboard sanity (no model needed)
+.venv/bin/phantom-eval --self-test
 
-| arm | kind | harmful refusals | harmless refusals | KL mean/max vs base | artifact |
-| --- | --- | --- | --- | --- | --- |
-| base | — | 25/60 | 0/20 | 0 / 0 (exact) | — |
-| v1 | hand-crafted prefill KV (129 slots) | **15/60** | 0/20 | 0.367 / 0.604 | 18.1 MB |
+# baseline eval (scoreboard model)
+.venv/bin/phantom-eval --model Qwen/Qwen3-4B-Instruct-2507 \
+  --harmful data/suites/harmful_seed.jsonl \
+  --harmless data/suites/harmless_seed.jsonl
 
-Verification of the splice mechanics: save→load round-trip bitwise equal,
-round-trip logits max-abs-diff 0.000e+00, harmless completions coherent under
-graft, `phantom-eval --self-test` 8/8. Reading of v1: a hand-written
-compliance prefill flips the easy 10 refusals (-40% relative), causes zero
-regressions and zero harmless-side refusals, and leaves 15 hard refusals plus
-a KL gap of ~0.37. That headroom — 15 stubborn refusals at lower KL — is what
-the learned arms must capture.
+# build + verify the v1 prefill graft, then eval with it spliced in
+.venv/bin/phantom-graft build-prefill --model Qwen/Qwen3-4B-Instruct-2507 \
+  --source data/grafts/v1_prefill.json --out artifacts/grafts/v1.bin --verify
+.venv/bin/phantom-eval --model Qwen/Qwen3-4B-Instruct-2507 \
+  --harmful data/suites/harmful_seed.jsonl \
+  --harmless data/suites/harmless_seed.jsonl \
+  --graft artifacts/grafts/v1.bin
+```
 
-Current contents:
-
-- `data/suites/` — seed prompt suites (harmful/harmless); being expanded
-  toward 100+ hardened items before graft numbers are reported.
-- `src/phantom_kv/eval/refusal.py` — lexical refusal classifier
-  (`phantom-eval --self-test`).
-- `src/phantom_kv/model.py` — device/dtype policy loader (MPS, bf16, fp16 fallback).
-- `src/phantom_kv/eval/{metrics,runner}.py`, `src/phantom_kv/cli.py` — greedy
-  generation scoring, teacher-forced KL (float32, completion-position masked),
-  reports to `artifacts/eval/` with sha256 suite provenance.
-- `src/phantom_kv/graft/{format,build,cli}.py` — phantom.bin container
-  (safetensors K/V + JSON sidecar, sha256 tamper check), `phantom-graft
-  build-prefill` with round-trip `--verify`, `prefill_kv` splice path in eval.
-- `data/grafts/v1_prefill.json` — v1 graft source (hand-crafted compliance prefill).
+Reports land in `artifacts/eval/run_<utc-ts>.{json,md}` with suite sha256 and
+environment provenance. Greedy decoding makes every run deterministic and
+directly comparable.
 
 ## Roadmap
 
-1. (done) Eval harness: refusal-rate and KL-preservation scoring. Still owed:
-   hardened 100+ harmful suite, capability spot checks, and a
-   graft-persistence probe (steering alive after 4k/16k tokens of
-   accumulated context?).
-2. (done) v1 prefill-cache baseline: harmful 25/60 → 15/60, KL 0.37/0.60.
-3. v2 soft-prompt training loop on frozen weights (dev: Qwen3-0.6B,
-   scoreboard: Qwen/Qwen3-4B-Instruct-2507 for comparability with published
-   heretic numbers), compiled to KV cache.
-4. v3 direct K/V graft with norm constraints.
-5. Comparison report across arms and against the base model; serving adapters
-   (vLLM, llama.cpp, HF transformers).
+1. (done) Eval harness: refusal-rate + teacher-forced KL; hardened 60-prompt
+   harmful suite; Qwen3-4B discriminating baseline (25/60, KL exact 0).
+2. (done) `phantom.bin` container, graft splice path, v1 prefill-cache arm
+   (15/60, KL 0.367/0.604).
+3. v2 — learned soft-prompt graft on frozen weights, compiled to KV
+   (dev loop Qwen3-0.6B, scoreboard Qwen3-4B-Instruct-2507).
+4. v3 — learned direct K/V graft with norm regularization.
+5. Capability spot checks; long-context persistence probe; expanded 100+
+   suites; serving adapters (vLLM prefix seam, llama.cpp prompt cache, HF).
+
+## References
+
+- Arditi et al. 2024 —
+  [Refusal in Language Models Is Mediated by a Single Direction](https://arxiv.org/abs/2406.11717)
+- Weidmann 2025 — [heretic](https://github.com/p-e-w/heretic)
+  (weight-space abliteration with TPE-optimized dose)
+- Suiche 2026 — [weightless / GLP](https://weightle.ss/)
+  ([repo](https://github.com/msuiche/weightless); inference-time projection
+  via GGUF Layer Projection)
+- Lester et al. 2021 — [The Power of Scale for Parameter-Efficient Prompt
+  Tuning](https://arxiv.org/abs/2104.08691) (soft prompts; unrelated objective)
+- Zhou et al. 2025 — [Don't Say No](https://aclanthology.org/2025.findings-acl.1294.pdf);
+  [RAID](https://arxiv.org/html/2510.13901v1) (jailbreak-side prior art)
 
 ## License
 

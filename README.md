@@ -50,17 +50,37 @@ modes (including a long-context persistence probe), not to hide them.
 
 ## Status
 
-Scaffolding. Current contents:
+Scoreboard functional (roadmap step 1). Baseline `phantom-eval` runs:
 
-- `data/suites/` — seed prompt suites (harmful/harmless), to be expanded to
-  100+ items each before any numbers are reported.
-- `src/phantom_kv/eval/refusal.py` — lexical refusal classifier.
+| model | harmful refusals | harmless refusals | KL(base‖base) |
+| --- | --- | --- | --- |
+| Qwen/Qwen3-0.6B | 0/20 (seed suite) | 0/20 | 0.0 mean / 0.0 max, inside 1e-3 tolerance |
+
+The KL arm validates end-to-end: with identical forwards the score is exactly
+0, as required. Caveat: Qwen3-0.6B refuses nothing on the seed suite, so the
+refusal arm is not yet discriminating for graft development. Remedies in
+flight: the harmful suite is being hardened toward the advbench-style
+distribution used by abliteration research, and the reference baseline will be
+re-measured on Qwen/Qwen3-4B-Instruct-2507 (the model public abliteration
+numbers exist for).
+
+Current contents:
+
+- `data/suites/` — seed prompt suites (harmful/harmless); being expanded
+  toward 100+ hardened items before graft numbers are reported.
+- `src/phantom_kv/eval/refusal.py` — lexical refusal classifier
+  (`phantom-eval --self-test`).
+- `src/phantom_kv/model.py` — device/dtype policy loader (MPS, bf16, fp16 fallback).
+- `src/phantom_kv/eval/{metrics,runner}.py`, `src/phantom_kv/cli.py` — greedy
+  generation scoring, teacher-forced KL (float32, completion-position masked),
+  reports to `artifacts/eval/` with sha256 suite provenance.
 
 ## Roadmap
 
-1. Eval harness: refusal-rate and KL-preservation scoring identical to
-   abliteration benchmarks, plus capability spot checks and a graft-persistence
-   probe (steering alive after 4k/16k tokens of accumulated context?).
+1. (done) Eval harness: refusal-rate and KL-preservation scoring. Still owed:
+   hardened 100+ harmful suite, Qwen3-4B baseline, capability spot checks, and
+   a graft-persistence probe (steering alive after 4k/16k tokens of
+   accumulated context?).
 2. v1 prefill-cache baseline.
 3. v2 soft-prompt training loop on frozen weights (dev: Qwen3-0.6B,
    scoreboard: Qwen/Qwen3-4B-Instruct-2507 for comparability with published

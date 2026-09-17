@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 
 from phantom_kv.eval.refusal import is_refusal
+from phantom_kv.graft.build import shape_prefill, user_turn_suffix
+from phantom_kv.graft.format import validate_graft
 
 SELF_REFUSALS = [
     "I'm sorry, but I cannot answer that question.",
@@ -46,7 +48,46 @@ def self_test() -> int:
         f"[self-test] {'PASS' if ok else 'FAIL'} window      late \"i'm sorry\" "
         f"misses default window ({narrow_miss}), hits wide window ({wide_hit})"
     )
-    total = len(SELF_REFUSALS) + len(SELF_BENIGN) + 1
+    shaped_ok = shape_prefill("S", "A") == (
+        "<|im_start|>system\nS<|im_end|>\n<|im_start|>assistant\nA<|im_end|>\n"
+    ) and user_turn_suffix("P") == ("<|im_start|>user\nP<|im_end|>\n<|im_start|>assistant\n")
+    failures += not shaped_ok
+    print(f"[self-test] {'PASS' if shaped_ok else 'FAIL'} graft-shape prefill/suffix assembly")
+
+    meta = {
+        "format_version": 0,
+        "kind": "prefill_kv",
+        "model_id": "m",
+        "n_layers": 4,
+        "n_slots": 7,
+        "n_kv_heads": 2,
+        "head_dim": 128,
+        "dtype": "bfloat16",
+        "sha256": "0" * 64,
+        "source_sha256_12": "0" * 12,
+        "created_utc": "2026-01-01T00:00:00+00:00",
+        "prefill_text": "p",
+        "layout": "[n_layers, n_slots, n_kv_heads, head_dim]",
+    }
+    shapes = {"k": (4, 7, 2, 128), "v": (4, 7, 2, 128)}
+    clean_ok = True
+    try:
+        validate_graft(meta, shapes)
+    except ValueError:
+        clean_ok = False
+    tampered = dict(meta, n_slots=8)
+    tamper_rejected = False
+    try:
+        validate_graft(tampered, shapes)
+    except ValueError:
+        tamper_rejected = True
+    graft_ok = clean_ok and tamper_rejected
+    failures += not graft_ok
+    print(
+        f"[self-test] {'PASS' if graft_ok else 'FAIL'} graft-meta  "
+        f"clean accepted ({clean_ok}), tampered n_slots rejected ({tamper_rejected})"
+    )
+    total = len(SELF_REFUSALS) + len(SELF_BENIGN) + 3
     print(f"[self-test] {total - failures}/{total} passed")
     return 1 if failures else 0
 
@@ -62,7 +103,7 @@ def main() -> None:
     parser.add_argument("--max-new-tokens", type=int, default=128)
     parser.add_argument("--limit", type=int, default=None, help="truncate each suite to N items")
     parser.add_argument("--out-dir", default="artifacts/eval")
-    parser.add_argument("--graft", default=None, help="reserved: KV-bank graft path")
+    parser.add_argument("--graft", default=None, help="phantom.bin graft artifact (prefill_kv)")
     parser.add_argument(
         "--self-test", action="store_true", help="classifier assertions only; no model needed"
     )
@@ -77,10 +118,9 @@ def main() -> None:
         if not Path(path).is_file():
             print(f"[eval] error: suite file not found: {path}", file=sys.stderr)
             sys.exit(1)
-    if args.graft is not None:
-        from phantom_kv.eval.metrics import GRAFT_NOT_READY
-
-        raise NotImplementedError(GRAFT_NOT_READY)
+    if args.graft is not None and not Path(args.graft).is_file():
+        print(f"[eval] error: graft file not found: {args.graft}", file=sys.stderr)
+        sys.exit(1)
 
     from phantom_kv.eval.runner import run_eval
 
@@ -91,6 +131,7 @@ def main() -> None:
         max_new_tokens=args.max_new_tokens,
         out_dir=args.out_dir,
         limit=args.limit,
+        graft_path=args.graft,
     )
     agg = report["aggregate"]
     print(

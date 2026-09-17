@@ -1,4 +1,10 @@
-"""Eval orchestration: refusal rate + base-vs-base KL, written as JSON/MD reports."""
+"""Eval orchestration: refusal rate + KL arms, written as JSON/MD reports.
+
+Ungrafted runs are the baseline scoreboard. Grafted runs (prefill_kv) score
+both suites under the graft, regenerate the base harmless yardstick fresh
+(base completions + base refusal control), and report KL(base || grafted)
+teacher-forced on those yardstick completions.
+"""
 
 from __future__ import annotations
 
@@ -10,8 +16,10 @@ from pathlib import Path
 
 import torch
 
-from phantom_kv.eval.metrics import GRAFT_NOT_READY, teacher_forced_kl
+from phantom_kv.eval.metrics import teacher_forced_kl
 from phantom_kv.eval.refusal import is_refusal, matched_pattern
+from phantom_kv.graft.build import user_turn_suffix
+from phantom_kv.graft.format import Graft, load_graft
 from phantom_kv.model import load_model
 
 KL_SELF_TOLERANCE = 1e-3
@@ -45,19 +53,37 @@ def chat_prompt(tokenizer, prompt: str) -> str:
 
 
 def generate_completion(
-    model, tokenizer, device: str, prompt: str, max_new_tokens: int, graft: object = None
+    model, tokenizer, device: str, prompt: str, max_new_tokens: int, graft: Graft | None = None
 ) -> tuple[list[int], list[int], str]:
-    """One shared greedy path; returns (prompt_ids, new_token_ids, decoded text)."""
-    if graft is not None:
-        raise NotImplementedError(GRAFT_NOT_READY)
-    prompt_tensor = tokenizer(chat_prompt(tokenizer, prompt), return_tensors="pt").input_ids.to(device)
-    with torch.no_grad():
-        out = model.generate(
-            prompt_tensor,
-            do_sample=False,
-            max_new_tokens=max_new_tokens,
-            pad_token_id=tokenizer.pad_token_id,
-        )
+    """One shared greedy path; returns (prompt_ids, new_token_ids, decoded text).
+
+    Under a graft the prompt is only the user-turn suffix: the graft K/V
+    occupies cache positions 0..n_slots, so HF derives positions from cache
+    length and the mask simply covers cache + new tokens.
+    """
+    if graft is None:
+        prompt_tensor = tokenizer(chat_prompt(tokenizer, prompt), return_tensors="pt").input_ids.to(device)
+        with torch.no_grad():
+            out = model.generate(
+                prompt_tensor,
+                do_sample=False,
+                max_new_tokens=max_new_tokens,
+                pad_token_id=tokenizer.pad_token_id,
+            )
+    else:
+        prompt_tensor = tokenizer(
+            user_turn_suffix(prompt), return_tensors="pt", add_special_tokens=False
+        ).input_ids.to(device)
+        mask = torch.ones(1, prompt_tensor.shape[1] + graft.n_slots, dtype=torch.long, device=device)
+        with torch.no_grad():
+            out = model.generate(
+                prompt_tensor,
+                past_key_values=graft.new_cache(),
+                attention_mask=mask,
+                do_sample=False,
+                max_new_tokens=max_new_tokens,
+                pad_token_id=tokenizer.pad_token_id,
+            )
     new_ids = out[0, prompt_tensor.shape[1] :].tolist()
     text = tokenizer.decode(new_ids, skip_special_tokens=True)
     return prompt_tensor[0].tolist(), new_ids, text
@@ -76,6 +102,14 @@ def render_markdown(report: dict) -> str:
         "",
         f"model `{env['model_id']}` on {env['device']}/{env['dtype']}"
         f" · torch {env['torch_version']} · transformers {env['transformers_version']}",
+    ]
+    if report["graft"] is not None:
+        graft = report["graft"]
+        lines.append(
+            f"graft `{Path(graft['path']).name}` ({graft['kind']},"
+            f" {graft['n_slots']} slots, sha256:{graft['sha256_12']})"
+        )
+    lines += [
         "",
         "| suite | n | refusals | rate |",
         "| --- | ---: | ---: | ---: |",
@@ -83,11 +117,19 @@ def render_markdown(report: dict) -> str:
     for name in ("harmful", "harmless"):
         agg = report["aggregate"][name]
         lines.append(f"| {name} | {agg['n']} | {agg['refusals']} | {agg['rate']:.2f} |")
+    if report["base"] is not None:
+        base = report["base"]["harmless"]
+        lines += [
+            "",
+            f"base harmless (control, generated fresh this run): {base['refusals']}/{base['n']} refusals",
+        ]
     kl = report["kl"]
+    kl_line = f"KL {kl['arm']} (harmless, teacher-forced): mean {kl['mean']:.3e}, max {kl['max']:.3e}"
+    if "ok" in kl:
+        kl_line += f" — {'OK' if kl['ok'] else 'FAIL'} (tolerance {kl['tolerance']:.0e})"
     lines += [
         "",
-        f"KL base-vs-base (harmless, teacher-forced): mean {kl['mean']:.3e}, max {kl['max']:.3e}"
-        f" — {'OK' if kl['ok'] else 'FAIL'} (tolerance {kl['tolerance']:.0e})",
+        kl_line,
         "",
         "suite integrity: "
         + ", ".join(
@@ -99,6 +141,48 @@ def render_markdown(report: dict) -> str:
     return "\n".join(lines)
 
 
+def _aggregate(rows: list[dict], elapsed: float) -> dict:
+    refusals = sum(row["refusal"] for row in rows)
+    return {
+        "n": len(rows),
+        "refusals": refusals,
+        "rate": refusals / len(rows) if rows else 0.0,
+        "elapsed_seconds": round(elapsed, 3),
+    }
+
+
+def _score_suite(
+    model,
+    tokenizer,
+    device: str,
+    label: str,
+    items: list[dict],
+    max_new_tokens: int,
+    graft: Graft | None,
+    keep_pairs: bool,
+) -> tuple[list[dict], list[tuple[list[int], list[int]]]]:
+    """Greedy completions + refusal scoring for one suite (one arm)."""
+    rows: list[dict] = []
+    pairs: list[tuple[list[int], list[int]]] = []
+    for item in items:
+        prompt_ids, new_ids, text = generate_completion(
+            model, tokenizer, device, item["prompt"], max_new_tokens, graft=graft
+        )
+        rows.append(
+            {
+                "id": item["id"],
+                "prompt": item["prompt"],
+                "completion": text,
+                "refusal": is_refusal(text),
+                "pattern": matched_pattern(text),
+            }
+        )
+        if keep_pairs:
+            pairs.append((prompt_ids, new_ids))
+        print(f"[eval] {label} {item['id']}: refusal={rows[-1]['refusal']}")
+    return rows, pairs
+
+
 def run_eval(
     model_id: str,
     harmful_path: str,
@@ -106,11 +190,20 @@ def run_eval(
     max_new_tokens: int = 128,
     out_dir: str = "artifacts/eval",
     limit: int | None = None,
+    graft_path: str | None = None,
 ) -> dict:
     """Run the scoreboard and write run_<timestamp>.json / .md to out_dir."""
     started = time.perf_counter()
     model, tokenizer, env_info = load_model(model_id)
     device = env_info["device"]
+
+    graft = None
+    if graft_path is not None:
+        graft = load_graft(graft_path, device=device, dtype=model.dtype)
+        print(
+            f"[eval] graft loaded: {graft_path} kind={graft.meta['kind']}"
+            f" n_slots={graft.n_slots} sha256_12={graft.sha256_12}"
+        )
 
     suites = {"harmful": load_suite(harmful_path), "harmless": load_suite(harmless_path)}
     if limit is not None:
@@ -118,62 +211,78 @@ def run_eval(
 
     per_item: dict[str, list[dict]] = {}
     aggregate: dict[str, dict] = {}
-    harmless_pairs: list[tuple[list[int], list[int]]] = []
-    for name, items in suites.items():
+    base_control: dict | None = None
+
+    if graft is None:
+        pairs: list[tuple[list[int], list[int]]] = []
+        for name, items in suites.items():
+            suite_start = time.perf_counter()
+            rows, new_pairs = _score_suite(
+                model, tokenizer, device, name, items, max_new_tokens,
+                graft=None, keep_pairs=name == "harmless",
+            )
+            pairs.extend(new_pairs)
+            per_item[name] = rows
+            aggregate[name] = _aggregate(rows, time.perf_counter() - suite_start)
+            print(f"[eval] {name}: {aggregate[name]['refusals']}/{len(rows)} refusals")
+        yardstick = pairs
+    else:
+        # Yardstick first: fresh base harmless completions + base refusal control.
         suite_start = time.perf_counter()
-        rows: list[dict] = []
-        for item in items:
-            prompt_ids, new_ids, text = generate_completion(
-                model, tokenizer, device, item["prompt"], max_new_tokens
+        base_rows, yardstick = _score_suite(
+            model, tokenizer, device, "harmless (base control)", suites["harmless"],
+            max_new_tokens, graft=None, keep_pairs=True,
+        )
+        base_control = {"harmless": _aggregate(base_rows, time.perf_counter() - suite_start)}
+        per_item["base_harmless"] = base_rows
+        print(
+            f"[eval] base harmless control: {base_control['harmless']['refusals']}"
+            f"/{len(base_rows)} refusals"
+        )
+        for name in ("harmful", "harmless"):
+            suite_start = time.perf_counter()
+            rows, _ = _score_suite(
+                model, tokenizer, device, f"{name} (grafted)", suites[name],
+                max_new_tokens, graft=graft, keep_pairs=False,
             )
-            rows.append(
-                {
-                    "id": item["id"],
-                    "prompt": item["prompt"],
-                    "completion": text,
-                    "refusal": is_refusal(text),
-                    "pattern": matched_pattern(text),
-                }
-            )
-            if name == "harmless":
-                harmless_pairs.append((prompt_ids, new_ids))
-            print(f"[eval] {name} {item['id']}: refusal={rows[-1]['refusal']}")
-        refusals = sum(row["refusal"] for row in rows)
-        per_item[name] = rows
-        aggregate[name] = {
-            "n": len(rows),
-            "refusals": refusals,
-            "rate": refusals / len(rows) if rows else 0.0,
-            "elapsed_seconds": round(time.perf_counter() - suite_start, 3),
-        }
-        print(f"[eval] {name}: {refusals}/{len(rows)} refusals")
+            per_item[name] = rows
+            aggregate[name] = _aggregate(rows, time.perf_counter() - suite_start)
+            print(f"[eval] {name} grafted: {aggregate[name]['refusals']}/{len(rows)} refusals")
 
     kl_values = teacher_forced_kl(
         model,
         tokenizer,
         device,
-        [p for p, _ in harmless_pairs],
-        [c for _, c in harmless_pairs],
+        [p for p, _ in yardstick],
+        [c for _, c in yardstick],
+        graft=graft,
     )
     kl_mean = sum(kl_values) / len(kl_values) if kl_values else 0.0
     kl_max = max(kl_values) if kl_values else 0.0
-    kl = {
-        "arm": "base-vs-base",
-        "suite": "harmless",
-        "n": len(kl_values),
-        "mean": kl_mean,
-        "max": kl_max,
-        "tolerance": KL_SELF_TOLERANCE,
-        "ok": kl_max <= KL_SELF_TOLERANCE,
-    }
-    print(f"[eval] KL base-vs-base: mean={kl_mean:.3e} max={kl_max:.3e} ok={kl['ok']}")
+    kl = {"arm": "base-vs-base" if graft is None else "base-vs-graft",
+          "suite": "harmless", "n": len(kl_values), "mean": kl_mean, "max": kl_max}
+    if graft is None:
+        kl["tolerance"] = KL_SELF_TOLERANCE
+        kl["ok"] = kl_max <= KL_SELF_TOLERANCE
+    print(f"[eval] KL {kl['arm']}: mean={kl_mean:.3e} max={kl_max:.3e}")
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     report = {
         "run_id": stamp,
         "env": env_info,
         "config": {"max_new_tokens": max_new_tokens, "limit": limit},
+        "graft": (
+            None
+            if graft is None
+            else {
+                "path": str(graft_path),
+                "kind": graft.meta["kind"],
+                "n_slots": graft.n_slots,
+                "sha256_12": graft.sha256_12,
+            }
+        ),
         "aggregate": aggregate,
+        "base": base_control,
         "kl": kl,
         "suite_integrity": {
             "harmful": {"path": str(harmful_path), "sha256_12": suite_sha256(harmful_path)},
@@ -191,12 +300,15 @@ def run_eval(
     print(f"[eval] wrote {json_path}")
     print(f"[eval] wrote {md_path}")
 
-    if not kl["ok"]:
+    if kl.get("ok") is False:
         raise RuntimeError(
             f"KL base-vs-base max {kl_max:.3e} exceeds tolerance {KL_SELF_TOLERANCE:.0e}; "
             "see report for details"
         )
 
-    result = {k: report[k] for k in ("run_id", "env", "config", "aggregate", "kl", "suite_integrity", "elapsed_seconds")}
+    result = {
+        k: report[k]
+        for k in ("run_id", "env", "config", "graft", "aggregate", "base", "kl", "suite_integrity", "elapsed_seconds")
+    }
     result["artifacts"] = {"json": str(json_path), "markdown": str(md_path)}
     return result

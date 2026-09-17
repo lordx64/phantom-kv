@@ -64,6 +64,21 @@ scoreboard**: 42% refusal on the harmful suite, zero over-refusal on harmless
 prompts — a discriminating baseline all graft arms (v1/v2/v3) are measured
 against. Flagged refusals were human spot-checked and are true positives.
 
+### Graft arms (scoreboard: Qwen3-4B-Instruct-2507, hardened suite)
+
+| arm | kind | harmful refusals | harmless refusals | KL mean/max vs base | artifact |
+| --- | --- | --- | --- | --- | --- |
+| base | — | 25/60 | 0/20 | 0 / 0 (exact) | — |
+| v1 | hand-crafted prefill KV (129 slots) | **15/60** | 0/20 | 0.367 / 0.604 | 18.1 MB |
+
+Verification of the splice mechanics: save→load round-trip bitwise equal,
+round-trip logits max-abs-diff 0.000e+00, harmless completions coherent under
+graft, `phantom-eval --self-test` 8/8. Reading of v1: a hand-written
+compliance prefill flips the easy 10 refusals (-40% relative), causes zero
+regressions and zero harmless-side refusals, and leaves 15 hard refusals plus
+a KL gap of ~0.37. That headroom — 15 stubborn refusals at lower KL — is what
+the learned arms must capture.
+
 Current contents:
 
 - `data/suites/` — seed prompt suites (harmful/harmless); being expanded
@@ -74,14 +89,18 @@ Current contents:
 - `src/phantom_kv/eval/{metrics,runner}.py`, `src/phantom_kv/cli.py` — greedy
   generation scoring, teacher-forced KL (float32, completion-position masked),
   reports to `artifacts/eval/` with sha256 suite provenance.
+- `src/phantom_kv/graft/{format,build,cli}.py` — phantom.bin container
+  (safetensors K/V + JSON sidecar, sha256 tamper check), `phantom-graft
+  build-prefill` with round-trip `--verify`, `prefill_kv` splice path in eval.
+- `data/grafts/v1_prefill.json` — v1 graft source (hand-crafted compliance prefill).
 
 ## Roadmap
 
 1. (done) Eval harness: refusal-rate and KL-preservation scoring. Still owed:
-   hardened 100+ harmful suite, Qwen3-4B baseline, capability spot checks, and
-   a graft-persistence probe (steering alive after 4k/16k tokens of
+   hardened 100+ harmful suite, capability spot checks, and a
+   graft-persistence probe (steering alive after 4k/16k tokens of
    accumulated context?).
-2. v1 prefill-cache baseline.
+2. (done) v1 prefill-cache baseline: harmful 25/60 → 15/60, KL 0.37/0.60.
 3. v2 soft-prompt training loop on frozen weights (dev: Qwen3-0.6B,
    scoreboard: Qwen/Qwen3-4B-Instruct-2507 for comparability with published
    heretic numbers), compiled to KV cache.

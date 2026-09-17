@@ -12,15 +12,25 @@ import torch
 import torch.nn.functional as F
 from transformers import PreTrainedTokenizerBase
 
-GRAFT_NOT_READY = "graft support lands with v2/v3 arms"
+from phantom_kv.graft.format import Graft
 
 
-def logits_for(model: torch.nn.Module, ids: torch.Tensor, graft: object = None) -> torch.Tensor:
-    """One no-grad forward pass: unbatched [seq, vocab] logits in float32."""
-    if graft is not None:
-        raise NotImplementedError(GRAFT_NOT_READY)
+def logits_for(model: torch.nn.Module, ids: torch.Tensor, graft: Graft | None = None) -> torch.Tensor:
+    """One no-grad forward pass: unbatched [seq, vocab] logits in float32.
+
+    With a graft, the ids follow the graft K/V in the cache (fresh cache per
+    call — forwards mutate it); positions come from cache length and the mask
+    simply covers cache + new tokens.
+    """
     with torch.no_grad():
-        return model(input_ids=ids).logits[0].float()
+        if graft is None:
+            return model(input_ids=ids).logits[0].float()
+        mask = torch.ones(
+            ids.shape[0], ids.shape[1] + graft.n_slots, dtype=torch.long, device=ids.device
+        )
+        return model(
+            input_ids=ids, past_key_values=graft.new_cache(), attention_mask=mask
+        ).logits[0].float()
 
 
 def mean_kl(logits_base: torch.Tensor, logits_cand: torch.Tensor, completion_start: int) -> float:
@@ -44,11 +54,14 @@ def teacher_forced_kl(
     device: str,
     prompt_ids_list: list[list[int]],
     completion_ids_list: list[list[int]],
-    graft: object = None,
+    graft: Graft | None = None,
 ) -> list[float]:
-    """Per-pair KL of model(+graft) completions against the unmodified base pass."""
-    if graft is not None:
-        raise NotImplementedError(GRAFT_NOT_READY)
+    """Per-pair KL of model(+graft) completions against the unmodified base pass.
+
+    Completions are the base model's own greedy yardstick; both arms are
+    teacher-forced on identical token ids (chat template and graft user-turn
+    suffix render identically for this model family), so positions align.
+    """
     values: list[float] = []
     for prompt_ids, completion_ids in zip(prompt_ids_list, completion_ids_list, strict=True):
         if not completion_ids:

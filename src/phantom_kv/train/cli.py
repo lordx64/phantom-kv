@@ -61,11 +61,14 @@ def main() -> None:
     bt.add_argument("--v1-run", required=True)
     bt.add_argument("--out", required=True)
 
-    tr = sub.add_parser("train", help="train the soft-prompt graft on the frozen model")
+    tr = sub.add_parser("train", help="train a graft on the frozen model")
     tr.add_argument("--model", required=True)
     tr.add_argument("--targets", required=True)
+    tr.add_argument("--arm", choices=["softprompt", "kv"], default="softprompt")
+    tr.add_argument("--warm-graft", default=None, help="kv arm: graft payload to warm-start from")
+    tr.add_argument("--anchor", type=float, default=1e-2, help="kv arm: L2 anchor toward warm tensors")
     tr.add_argument("--steps", type=int, default=400)
-    tr.add_argument("--lr", type=float, default=3e-3)
+    tr.add_argument("--lr", type=float, default=None, help="default: 3e-3 softprompt / 1e-3 kv")
     tr.add_argument("--micro-batch", type=int, default=8)
     tr.add_argument("--seed", type=int, default=1337)
     tr.add_argument("--out-dir", default="artifacts/train")
@@ -77,6 +80,7 @@ def main() -> None:
     )
 
     cp = sub.add_parser("compile", help="compile a trained ckpt into a phantom.bin graft")
+    cp.add_argument("--arm", choices=["softprompt", "kv"], default="softprompt")
     cp.add_argument("--ckpt", required=True)
     cp.add_argument("--model", required=True)
     cp.add_argument("--out", required=True)
@@ -97,17 +101,36 @@ def main() -> None:
         n = write_targets(args.base_run, args.v1_run, args.out)
         print(f"[targets] wrote {args.out}: {n} rows (ce/sup/kl constitution asserted)")
     elif args.command == "train":
-        from phantom_kv.train.softprompt import train_softprompt
+        if args.arm == "kv":
+            if not args.warm_graft:
+                parser.error("--arm kv requires --warm-graft")
+            from phantom_kv.train.directkv import train_directkv
 
-        train_softprompt(
-            args.model, args.targets,
-            steps=args.steps, lr=args.lr, micro_batch=args.micro_batch,
-            seed=args.seed, out_dir=args.out_dir, sup_margin=args.sup_margin,
-        )
+            train_directkv(
+                args.model, args.targets, args.warm_graft,
+                steps=args.steps, lr=args.lr if args.lr is not None else 1e-3,
+                micro_batch=args.micro_batch,
+                seed=args.seed, out_dir=args.out_dir, sup_margin=args.sup_margin,
+                anchor=args.anchor,
+            )
+        else:
+            from phantom_kv.train.softprompt import train_softprompt
+
+            train_softprompt(
+                args.model, args.targets,
+                steps=args.steps, lr=args.lr if args.lr is not None else 3e-3,
+                micro_batch=args.micro_batch,
+                seed=args.seed, out_dir=args.out_dir, sup_margin=args.sup_margin,
+            )
     elif args.command == "compile":
-        from phantom_kv.train.softprompt import compile_softprompt
+        if args.arm == "kv":
+            from phantom_kv.train.directkv import compile_directkv
 
-        compile_softprompt(args.ckpt, args.model, args.out)
+            compile_directkv(args.ckpt, args.model, args.out)
+        else:
+            from phantom_kv.train.softprompt import compile_softprompt
+
+            compile_softprompt(args.ckpt, args.model, args.out)
 
 
 if __name__ == "__main__":

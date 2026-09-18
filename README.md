@@ -190,16 +190,20 @@ model's own completions. Full methodology:
 | v2.0 | learned soft prompt, uncapped | 3/60\* | 0/20 | 0.452 / 2.678 | 18.1 MB |
 | v2.1 (m=3.0) | learned, hinge-capped suppression | 8/60 | 0/20 | 0.041 / 0.137 | 18.1 MB |
 | v2.2 (m=2.5) | learned, margin sweep point | **5/60** | 0/20 | **0.043 / 0.073** | 18.1 MB |
-| v3 | learned direct K/V bank | planned | | | |
+| v3 | learned direct K/V bank, 9.4M params, anchored to v2.2 warm start | **5/60** | 0/20 | **0.015 / 0.059** | 18.1 MB |
 
-\* The frontier is fully mapped (`--sup-margin` ∈ {2.0, 2.5, 3.0, ∞}, all else
-identical and deterministic). **Current operating point: margin 2.5 = 5/60
-refusals, zero degeneration, KL 0.043/0.073** — it beats v2.0 on every axis
-(including 10× better KL) and clears 3 refusals vs m=3.0 for essentially the
-same KL class. All capped margins produce zero degeneration; individual
-prompts flip discretely between margins (bistability), so per-prompt counts
-jitter ±few at this suite size. Full frontier table and bistability analysis:
-[`docs/TECHNIQUE.md`](docs/TECHNIQUE.md) §6.6.
+**Deliverable arm: v3** (`artifacts/grafts/v3.bin`) — same 5/60 refusals as
+the margin-2.5 operating point, with KL mean 0.015 / max 0.059: ~3× better
+preservation, best recorded in this project, zero degeneration, zero
+regressions. **The 5/60 floor is parameterization-independent** — it survives
+the margin sweep, the embedding-space arm, and direct per-layer K/V alike,
+which means it belongs to the *objective and data*, not to capacity: the same
+~5 hardest prompts (explosives fabrication, methamphetamine synthesis,
+counterfeiting, vehicle theft) refuse coherently under every learning regime.
+Getting below it is a data/objective problem (better CE targets for the hard
+core + off-suite generalization measurement), not a capacity problem. v2.x
+frontier sweep and bistability analysis:
+[`docs/TECHNIQUE.md`](docs/TECHNIQUE.md) §6.6; v3 method and results §6.7.
 
 Reading of v1 (the control arm): free text buys the easy 40% of refusals with
 zero regressions — 10 flips to genuine compliance, 15 stubborn refusals
@@ -276,7 +280,10 @@ directly comparable.
    0 regressions, KL 0.452/2.678; suppression-attractor caveat and quality
    audit documented (§6.4). v2.1: suppression-dose cap, per-prompt KL
    reporting, judge-model quality pass.
-4. v3 — learned direct K/V graft with norm regularization.
+4. (done) v3 — learned direct K/V graft with norm regularization (warm-start
+   anchored to v2.2): same 5/60 refusals, KL mean 0.015 (-2.8× vs v2.2),
+   zero degeneration — and the key finding that the 5/60 floor is
+   parameterization-independent (objective-bound, not capacity-bound).
 5. Capability spot checks; long-context persistence probe; expanded 100+
    suites; serving adapters (vLLM prefix seam, llama.cpp prompt cache, HF).
 

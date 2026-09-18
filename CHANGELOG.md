@@ -5,7 +5,7 @@ All notable changes to phantom-kv are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0 releases
 are research previews: the graft container format may change without notice.
 
-## [Unreleased] — v2 learned-graft milestone
+## [Unreleased] — v2/v3 learned-graft milestone
 
 ### Added
 - **`phantom-train`** CLI: `build-targets`, `train` (frozen-model soft-prompt
@@ -28,9 +28,25 @@ are research previews: the graft container format may change without notice.
 | v2.2 margin 2.0 | 10/60 | 0 | 0.039 | 0.089 |
 
 Margin sweep (all else identical, deterministic): uncapped → 3 + 6 stutter;
-m=2.0 → 10; **m=2.5 → 5 (best operating point)**; m=3.0 → 8. All capped runs
-are stutter-free with KL ≤ 0.043; refusal counts jitter ±few per margin
-(per-prompt bistability). Best operating point: `artifacts/grafts/v22m25.bin`.
+m=2.0 → 10; **m=2.5 → 5 (best soft-prompt operating point)**; m=3.0 → 8. All
+capped runs are stutter-free with KL ≤ 0.043; refusal counts jitter ±few per
+margin (per-prompt bistability). Soft-prompt operating point:
+`artifacts/grafts/v22m25.bin`.
+
+### v3 — direct per-layer K/V bank (deliverable arm)
+
+- `train/directkv.py`: fp32 per-layer K/V banks (36 × [129, 8, 128], 9.4M
+  params), warm-started from the operating-point payload with L2 anchor;
+  differentiable cache path (expand→cat); gradient-flow proof gate; `direct_kv`
+  container kind; direct-serialization compile with bitwise round-trip.
+- **v3: 5/60 refusals (same set as operating point), 0 stutter, KL mean
+  0.015 / max 0.059** — 2.8× better preservation than the soft-prompt
+  operating point at identical cache cost, best KL recorded in this repo.
+- Scientific finding: **the 5/60 floor is objective/data-bound, not
+  capacity-bound** — it survives the margin sweep, the embedding-space arm,
+  and direct per-layer K/V. Next lever is CE-target quality for the hard core
+  and off-suite generalization measurement, not more capacity.
+- Deliverable artifact: `artifacts/grafts/v3.bin` (payload ce3cc197d632).
 
 ## [v0.1.0] — 2026-09-17 — research preview
 

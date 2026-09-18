@@ -16,7 +16,8 @@ from pathlib import Path
 FORMAT_VERSION = 0
 GRAFT_KIND = "prefill_kv"
 SOFTPROMPT_KIND = "softprompt_kv"
-VALID_KINDS = (GRAFT_KIND, SOFTPROMPT_KIND)
+DIRECTKV_KIND = "direct_kv"
+VALID_KINDS = (GRAFT_KIND, SOFTPROMPT_KIND, DIRECTKV_KIND)
 TENSOR_LAYOUT = "[n_layers, n_slots, n_kv_heads, head_dim]"
 
 _META_KEYS = (

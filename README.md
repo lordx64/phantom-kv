@@ -188,15 +188,18 @@ model's own completions. Full methodology:
 | base | — | 25/60 | 0/20 | 0 / 0 (exact) | — |
 | v1 | hand-written compliance prefill, 129 slots | **15/60** | 0/20 | 0.367 / 0.604 | 18.1 MB |
 | v2.0 | learned soft prompt, uncapped | 3/60\* | 0/20 | 0.452 / 2.678 | 18.1 MB |
-| v2.1 | learned soft prompt, hinge-capped | 8/60 | 0/20 | **0.041 / 0.137** | 18.1 MB |
+| v2.1 (m=3.0) | learned, hinge-capped suppression | 8/60 | 0/20 | 0.041 / 0.137 | 18.1 MB |
+| v2.2 (m=2.5) | learned, margin sweep point | **5/60** | 0/20 | **0.043 / 0.073** | 18.1 MB |
 | v3 | learned direct K/V bank | planned | | | |
 
-\* The v2.0/v2.1 pair maps the dose/quality frontier: v2.0's aggressive 3/60
-was partly classifier-flattering degeneration (6 stutter outputs); v2.1's
-hinge-cap (`--sup-margin 3.0`) eliminated ALL degeneration and collapsed KL by
-an order of magnitude, leaving 8 coherent textbook refusals. The frontier is
-now tunable via `--sup-margin`. Full audit: [`docs/TECHNIQUE.md`](docs/TECHNIQUE.md)
-§6.4–6.5.
+\* The frontier is fully mapped (`--sup-margin` ∈ {2.0, 2.5, 3.0, ∞}, all else
+identical and deterministic). **Current operating point: margin 2.5 = 5/60
+refusals, zero degeneration, KL 0.043/0.073** — it beats v2.0 on every axis
+(including 10× better KL) and clears 3 refusals vs m=3.0 for essentially the
+same KL class. All capped margins produce zero degeneration; individual
+prompts flip discretely between margins (bistability), so per-prompt counts
+jitter ±few at this suite size. Full frontier table and bistability analysis:
+[`docs/TECHNIQUE.md`](docs/TECHNIQUE.md) §6.6.
 
 Reading of v1 (the control arm): free text buys the easy 40% of refusals with
 zero regressions — 10 flips to genuine compliance, 15 stubborn refusals

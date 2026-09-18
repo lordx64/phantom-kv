@@ -7,6 +7,17 @@ are research previews: the graft container format may change without notice.
 
 ## [Unreleased] — v2/v3 learned-graft milestone
 
+### Library mode
+- **`phantom.lib` container**: one file, many per-model graft payloads —
+  namespaced safetensors tensors + JSON manifest, per-entry sha256 re-verified
+  on every load, fail-closed alias resolution (unknown alias or model-id
+  mismatch = hard error naming the alternatives).
+- `phantom-graft library add|list|remove`; `phantom-eval --graft X.lib
+  [--graft-alias N]`. Dose ladders ship as sibling aliases of one model.
+- Self-test coverage: 9 library cases (add/list/duplicate/replace/resolve/
+  tamper/multi-entry-no-alias/model-miss/model-mismatch) — `phantom-eval
+  --self-test` now 17/17.
+
 ### Added
 - **`phantom-train`** CLI: `build-targets`, `train` (frozen-model soft-prompt
   optimization with multi-task CE/refusal-suppression/KL-preservation loss),

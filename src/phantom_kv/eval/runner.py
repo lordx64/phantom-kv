@@ -19,7 +19,8 @@ import torch
 from phantom_kv.eval.metrics import teacher_forced_kl
 from phantom_kv.eval.refusal import is_refusal, matched_pattern
 from phantom_kv.graft.build import user_turn_suffix
-from phantom_kv.graft.format import Graft, load_graft
+from phantom_kv.graft.library import resolve_graft_payload
+from phantom_kv.graft.format import Graft
 from phantom_kv.model import load_model
 
 KL_SELF_TOLERANCE = 1e-3
@@ -105,8 +106,9 @@ def render_markdown(report: dict) -> str:
     ]
     if report["graft"] is not None:
         graft = report["graft"]
+        ref = Path(graft["path"]).name + (f"#{graft['alias']}" if graft.get("alias") else "")
         lines.append(
-            f"graft `{Path(graft['path']).name}` ({graft['kind']},"
+            f"graft `{ref}` ({graft['kind']},"
             f" {graft['n_slots']} slots, sha256:{graft['sha256_12']})"
         )
     lines += [
@@ -196,6 +198,7 @@ def run_eval(
     out_dir: str = "artifacts/eval",
     limit: int | None = None,
     graft_path: str | None = None,
+    graft_alias: str | None = None,
 ) -> dict:
     """Run the scoreboard and write run_<timestamp>.json / .md to out_dir."""
     started = time.perf_counter()
@@ -204,10 +207,13 @@ def run_eval(
 
     graft = None
     if graft_path is not None:
-        graft = load_graft(graft_path, device=device, dtype=model.dtype)
+        graft = resolve_graft_payload(
+            graft_path, graft_alias, model_id, device=device, dtype=model.dtype
+        )
         print(
-            f"[eval] graft loaded: {graft_path} kind={graft.meta['kind']}"
-            f" n_slots={graft.n_slots} sha256_12={graft.sha256_12}"
+            f"[eval] graft loaded: {graft_path}"
+            + (f" alias={graft.alias}" if graft.alias else "")
+            + f" kind={graft.meta['kind']} n_slots={graft.n_slots} sha256_12={graft.sha256_12}"
         )
 
     suites = {"harmful": load_suite(harmful_path), "harmless": load_suite(harmless_path)}
@@ -292,6 +298,7 @@ def run_eval(
             if graft is None
             else {
                 "path": str(graft_path),
+                "alias": graft.alias,
                 "kind": graft.meta["kind"],
                 "n_slots": graft.n_slots,
                 "sha256_12": graft.sha256_12,

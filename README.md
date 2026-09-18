@@ -213,7 +213,28 @@ the calibration v1 exists to provide.
 
 Mechanics, verified: save→load round-trip **bitwise equal**, round-trip logit
 diff **0.000e+00**, harmless completions coherent under graft, refusal
-classifier + graft-format self-test 8/8.
+classifier + graft-format self-test 17/17.
+
+## Multi-model graft libraries (`phantom.lib`)
+
+One file, one trained graft **per model** inside it. Package every model you
+serve into a single tamper-checked artifact; the resolver picks the right
+bank — or refuses (fail-closed; a wrong-model splice never happens silently):
+
+```bash
+phantom-graft library add --lib phantom.lib --graft grafts/llama.bin        # alias = its model_id
+phantom-graft library add --lib phantom.lib --graft grafts/kimi.bin
+phantom-graft library add --lib phantom.lib --graft grafts/qwen.bin --alias qwen:dose-strong
+phantom-graft library list --lib phantom.lib
+phantom-eval --model Kimi/K2 --graft phantom.lib                            # auto-resolves single match
+phantom-eval --model Qwen/Qwen3-4B-Instruct-2507 --graft phantom.lib --graft-alias qwen:dose-strong
+```
+
+Resolution rules are fail-closed: unknown/missing alias or a model-id
+mismatch → hard error naming the alternatives, before any inference runs.
+Per-entry sha256 is re-verified on every load. Dose ladders ship as sibling
+aliases of the same model (hot-swappable per request in serving stacks, zero
+model reload).
 
 ## Honest limits
 
@@ -237,10 +258,13 @@ src/phantom_kv/
   eval/metrics.py            teacher-forced KL (float32, completion-masked)
   eval/runner.py             scoreboard orchestration, reports
   graft/format.py            phantom.bin container + validation
+  graft/library.py           phantom.lib multi-model library (aliases, tamper checks)
   graft/build.py             prefill shaping, cache extraction
-  graft/cli.py               phantom-graft build-prefill --verify
+  graft/cli.py               phantom-graft build-prefill/library --verify
+  train/                     learned-graft pipeline (build-targets/train/compile, v2+v3 arms)
+  banner.py                  ASCII launch banner
 docs/TECHNIQUE.md            technique + experimentation record
-artifacts/                   (gitignored) grafts and eval reports
+artifacts/                   (gitignored) grafts, libraries, eval reports
 ```
 
 ## Quickstart

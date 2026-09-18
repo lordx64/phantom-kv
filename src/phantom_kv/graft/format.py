@@ -66,11 +66,12 @@ class Graft:
     """Loaded prefill_kv bank. Holds stacked K/V and builds a fresh DynamicCache
     per forward, because forwards mutate the cache they are given in place."""
 
-    def __init__(self, k, v, meta: dict, path: str | Path):
+    def __init__(self, k, v, meta: dict, path: str | Path, alias: str | None = None):
         self.k = k
         self.v = v
         self.meta = meta
         self.path = Path(path)
+        self.alias = alias
 
     @property
     def n_slots(self) -> int:
@@ -79,6 +80,12 @@ class Graft:
     @property
     def sha256_12(self) -> str:
         return self.meta["sha256"][:12]
+
+    def place(self, device: str, dtype) -> Graft:
+        """Move bank tensors in place (library resolution loads on CPU first)."""
+        self.k = self.k.to(device=device, dtype=dtype)
+        self.v = self.v.to(device=device, dtype=dtype)
+        return self
 
     def new_cache(self):
         """Fresh DynamicCache holding the graft, in cache-native [1, H, N, D] per layer."""

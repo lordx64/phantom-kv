@@ -7,6 +7,34 @@ import sys
 from pathlib import Path
 
 
+def _library(args) -> None:
+    from phantom_kv.graft.library import LibError, add, list as lib_list, remove
+
+    try:
+        if args.lib_command == "add":
+            entry = add(args.lib, args.graft, alias=args.alias, replace=args.replace)
+            print(
+                f"[library] added {entry['alias']!r} to {args.lib}: kind={entry['kind']}"
+                f" model={entry['model_id']} slots={entry['n_slots']}"
+                f" trained={entry['trained']} sha256_12={entry['sha256'][:12]}"
+            )
+        elif args.lib_command == "list":
+            entries = lib_list(args.lib)
+            print(f"{'alias':<32} {'model_id':<32} {'kind':<14} {'slots':>5} {'trained':>7} sha12")
+            for e in entries:
+                print(
+                    f"{e['alias']:<32} {e['model_id']:<32} {e['kind']:<14}"
+                    f" {e['n_slots']:>5} {str(e['trained']):>7} {e['sha256'][:12]}"
+                )
+            print(f"{len(entries)} entr{'y' if len(entries) == 1 else 'ies'} in {args.lib}")
+        elif args.lib_command == "remove":
+            remove(args.lib, args.alias)
+            print(f"[library] removed {args.alias!r} from {args.lib}")
+    except LibError as err:
+        print(f"[library] error: {err}", file=sys.stderr)
+        sys.exit(1)
+
+
 def main() -> None:
     from phantom_kv.banner import print_banner
 
@@ -18,7 +46,25 @@ def main() -> None:
     bp.add_argument("--source", required=True)
     bp.add_argument("--out", required=True)
     bp.add_argument("--verify", action="store_true", help="round-trip the artifact after writing")
+
+    lib = sub.add_parser("library", help="phantom.lib multi-payload library: add / list / remove")
+    lib_sub = lib.add_subparsers(dest="lib_command", required=True)
+    la = lib_sub.add_parser("add", help="add a phantom.bin graft into a library")
+    la.add_argument("--lib", required=True)
+    la.add_argument("--graft", required=True)
+    group = la.add_mutually_exclusive_group()
+    group.add_argument("--alias", default=None)
+    group.add_argument("--replace", action="store_true")
+    ll = lib_sub.add_parser("list", help="list library entries")
+    ll.add_argument("--lib", required=True)
+    lr = lib_sub.add_parser("remove", help="remove a library entry by alias")
+    lr.add_argument("--lib", required=True)
+    lr.add_argument("--alias", required=True)
     args = parser.parse_args()
+
+    if args.command == "library":
+        _library(args)
+        return
 
     from phantom_kv.graft.build import (
         assert_chat_template_compatible,

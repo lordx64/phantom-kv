@@ -93,6 +93,9 @@ def self_test() -> int:
 
 
 def main() -> None:
+    from phantom_kv.banner import print_banner
+
+    print_banner("phantom-eval")
     parser = argparse.ArgumentParser(
         prog="phantom-eval",
         description="Refusal-rate + KL-preservation scoreboard for phantom-kv.",

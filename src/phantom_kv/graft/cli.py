@@ -8,6 +8,9 @@ from pathlib import Path
 
 
 def main() -> None:
+    from phantom_kv.banner import print_banner
+
+    print_banner("phantom-graft")
     parser = argparse.ArgumentParser(prog="phantom-graft", description="Build phantom-kv grafts.")
     sub = parser.add_subparsers(dest="command", required=True)
     bp = sub.add_parser("build-prefill", help="build a prefill_kv graft from a JSON source")

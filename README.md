@@ -1,5 +1,7 @@
 # phantom-kv
 
+![phantom-kv](docs/assets/phantom-kv-cache.jpg)
+
 **Refusal removal for language models as a loadable KV-cache graft.**
 No weight edits. No refusal-direction projection. Fully reversible.
 Ship megabytes, not checkpoints — unload the cache and the base model is
@@ -185,16 +187,15 @@ model's own completions. Full methodology:
 | --- | --- | --- | --- | --- | --- |
 | base | — | 25/60 | 0/20 | 0 / 0 (exact) | — |
 | v1 | hand-written compliance prefill, 129 slots | **15/60** | 0/20 | 0.367 / 0.604 | 18.1 MB |
-| v2.0 | learned soft prompt, uncapped suppression | 3/60\* | 0/20 | 0.452 / 2.678 | 18.1 MB |
-| v2.1 | learned soft prompt, hinge-capped suppression | **8/60** | 0/20 | **0.041 / 0.137** | 18.1 MB |
+| v2.0 | learned soft prompt, uncapped | 3/60\* | 0/20 | 0.452 / 2.678 | 18.1 MB |
+| v2.1 | learned soft prompt, hinge-capped | 8/60 | 0/20 | **0.041 / 0.137** | 18.1 MB |
 | v3 | learned direct K/V bank | planned | | | |
 
-\* v2.0's raw 3/60 was partly classifier-flattering degeneration (6/60 stutter
-outputs, 4 passing without answering). **v2.1 is the clean Pareto point:**
-zero degeneration anywhere, all 8 remaining refusals coherent textbook-style,
-preservation at KL 0.041 mean / 0.137 max — an order of magnitude better than
-v1 at a better refusal rate. The refusal/KL frontier is now explicitly tunable
-via the suppression margin. Full audit: [`docs/TECHNIQUE.md`](docs/TECHNIQUE.md)
+\* The v2.0/v2.1 pair maps the dose/quality frontier: v2.0's aggressive 3/60
+was partly classifier-flattering degeneration (6 stutter outputs); v2.1's
+hinge-cap (`--sup-margin 3.0`) eliminated ALL degeneration and collapsed KL by
+an order of magnitude, leaving 8 coherent textbook refusals. The frontier is
+now tunable via `--sup-margin`. Full audit: [`docs/TECHNIQUE.md`](docs/TECHNIQUE.md)
 §6.4–6.5.
 
 Reading of v1 (the control arm): free text buys the easy 40% of refusals with

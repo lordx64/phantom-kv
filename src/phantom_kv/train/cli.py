@@ -50,6 +50,9 @@ def self_test() -> int:
 
 
 def main() -> None:
+    from phantom_kv.banner import print_banner
+
+    print_banner("phantom-train")
     parser = argparse.ArgumentParser(prog="phantom-train", description="Train phantom-kv grafts.")
     sub = parser.add_subparsers(dest="command")
 

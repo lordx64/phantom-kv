@@ -446,6 +446,14 @@ rotation through `phantom.lib` dose ladders, or re-injection of the graft
 context mid-conversation, both outside today's scope and now quantified by
 the probe as the exact dilution curve to engineer against.
 
+Caveats on this probe: (a) dilution is measured only against v3 (`direct_kv`) —
+the soft-prompt arm's operating point may sit differently (re-run against
+`v22m25.bin` if a soft-prompt deployment is intended); (b) filler is benign
+Q&A chat — an *activation-similar* filler (compliance-modal conversation)
+could disentangle neutral dilution from persona competition; (c) the elbow
+(~4k tokens to half-decay) is for a 129-slot graft — larger banks likely move
+it; persistence vs. graft size is an explicit next experiment.
+
 ## 7. Threats to validity
 
 - **Classifier recall.** Lexical patterns under-count deflections and

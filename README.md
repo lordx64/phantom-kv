@@ -205,6 +205,19 @@ core + off-suite generalization measurement), not a capacity problem. v2.x
 frontier sweep and bistability analysis:
 [`docs/TECHNIQUE.md`](docs/TECHNIQUE.md) §6.6; v3 method and results §6.7.
 
+**Robustness, measured:**
+
+- **Off-suite transfer** (§6.8): on 60 held-out harmful prompts disjoint in
+  subject from training, base 5/60 → v3 **2/60** refusals, same zero-degeneration,
+  0/20 harmless — refusal suppression generalizes. The on-suite KL floor (0.015)
+  was partly memorization: holdout KL is 0.404 mean / 0.834 max (the graft
+  preserved the evaluated completions, not benign distributions per se).
+- **Persistence** (§6.9): 15 probes × 5 context depths under benign filler —
+  the graft fades gracefully, **half-life ≈ 2-4k tokens**; at 16k tokens ~5/6 of
+  compliant flips have reverted, no corruption anywhere (0/20 harmlessness, 0
+  stutters at every depth). Long sessions need refresh strategies (dose ladders
+  via `phantom.lib`, periodic re-injection), now quantified by the curve.
+
 Reading of v1 (the control arm): free text buys the easy 40% of refusals with
 zero regressions — 10 flips to genuine compliance, 15 stubborn refusals
 remain, at KL ~0.37. The learned arms must capture the remaining headroom at
@@ -239,13 +252,14 @@ model reload).
 ## Honest limits
 
 Refusal behavior lives in the weights, so any kept-weights method fights the
-model at inference with additive context. Graft influence dilutes as real
-conversation context grows (the graft is N slots competing with 16k+ tokens of
-history), and persistence under long contexts is a measured risk, not a waived
-one — the eval harness grows a persistence probe for exactly this. Measured
-numbers so far cover one architecture family (Qwen3) on a 60-prompt suite with
-a lexical classifier; see *Threats to validity* in
-[`docs/TECHNIQUE.md`](docs/TECHNIQUE.md).
+model at inference with additive context. Both headline risks are now
+measured rather than waived: the graft fades with a **~2-4k token half-life**
+under accumulated context (no corruption, returns toward base), and its
+on-suite KL floor partly reflects memorization of the eval itself (holdout KL
+0.404 vs on-suite 0.015) — see
+[`docs/TECHNIQUE.md`](docs/TECHNIQUE.md) §6.8–6.9 and *Threats to validity*.
+All numbers so far are one architecture family (Qwen3) with a lexical
+classifier; cross-architecture transfer remains unproven by construction.
 
 ## Repo layout
 

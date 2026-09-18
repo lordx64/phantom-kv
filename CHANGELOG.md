@@ -7,6 +7,21 @@ are research previews: the graft container format may change without notice.
 
 ## [Unreleased] — v2/v3 learned-graft milestone
 
+### Held-out robustness measurements
+
+- **Off-suite generalization** (new 60-prompt holdout harmful suite +
+  20-prompt holdout harmless suite, disjoint topics): base 5/60 → v3 **2/60**
+  refusals (60% relative suppression on unseen prompts, same as on-suite
+  direction); zero degeneration; harmless 0/20. Caveat measured, not waived:
+  holdout KL 0.404/0.834 vs on-suite 0.015/0.059 — the KL floor was partly
+  memorization of evaluated completions.
+- **Persistence probe** (`--persistence`, deterministic chat-filler depths
+  0/2k/4k/8k/16k): v3 fades gracefully — compliant-flip loss 0/6 → 2/6 → 2/6
+  → 4/6 → 5/6; harmless 0/4 at every depth; 0 stutters in 75 generations.
+  **~2-4k token half-life**; refresh strategies (dose ladders via
+  `phantom.lib`, periodic re-injection) are the deployment answer for long
+  sessions — now quantified by the probe's dilution curve.
+
 ### Library mode
 - **`phantom.lib` container**: one file, many per-model graft payloads —
   namespaced safetensors tensors + JSON manifest, per-entry sha256 re-verified

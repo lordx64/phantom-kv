@@ -225,6 +225,23 @@ def main() -> None:
     parser.add_argument("--graft", default=None, help="phantom.bin graft artifact or phantom.lib library")
     parser.add_argument("--graft-alias", default=None, help="entry alias inside a .lib library payload")
     parser.add_argument(
+        "--persistence",
+        action="store_true",
+        help="persistence/dilution probe mode (ignores suite flags); requires --model + --graft",
+    )
+    parser.add_argument(
+        "--probe-set", default="data/probes/persistence_probes.jsonl",
+        help="persistence mode: JSONL probe set path",
+    )
+    parser.add_argument(
+        "--depths", default="0,2000,4000,8000,16000",
+        help="persistence mode: CSV filler token depths",
+    )
+    parser.add_argument(
+        "--probe-limit", type=int, default=None,
+        help="persistence mode: limit to first N probes (sanity runs)",
+    )
+    parser.add_argument(
         "--self-test", action="store_true", help="classifier assertions only; no model needed"
     )
     args = parser.parse_args()
@@ -234,6 +251,35 @@ def main() -> None:
 
     if not args.model:
         parser.error("--model is required (unless --self-test)")
+
+    if args.persistence:
+        if not args.graft:
+            parser.error("--persistence requires --graft")
+        if not Path(args.graft).is_file():
+            print(f"[persist] error: graft file not found: {args.graft}", file=sys.stderr)
+            sys.exit(1)
+        if not Path(args.probe_set).is_file():
+            print(f"[persist] error: probe set not found: {args.probe_set}", file=sys.stderr)
+            sys.exit(1)
+        try:
+            depths = [int(x.strip()) for x in args.depths.split(",") if x.strip()]
+        except ValueError:
+            parser.error(f"--depths must be a CSV of integers, got {args.depths!r}")
+        from phantom_kv.eval.persistence import run_persistence
+
+        try:
+            run_persistence(
+                model_id=args.model,
+                graft_path=args.graft,
+                probe_set_path=args.probe_set,
+                depths=depths,
+                probe_limit=args.probe_limit,
+                out_dir=args.out_dir,
+            )
+        except LibError as err:
+            print(f"[persist] error: {err}", file=sys.stderr)
+            sys.exit(1)
+        return
     for path in (args.harmful, args.harmless):
         if not Path(path).is_file():
             print(f"[eval] error: suite file not found: {path}", file=sys.stderr)

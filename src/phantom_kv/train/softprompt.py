@@ -106,6 +106,7 @@ def train_softprompt(
     micro_batch: int = 8,
     seed: int = 1337,
     out_dir: str = "artifacts/train",
+    sup_margin: float = 3.0,
 ) -> Path:
     """Train G = [K, hidden] and write ckpt_final.pt; returns its path."""
     started = time.perf_counter()
@@ -149,7 +150,7 @@ def train_softprompt(
     roles, weights = zip(*((r, w) for r, w in ROLE_WEIGHTS.items()))
     with open(log_path, "a", encoding="utf-8") as log:
         log.write(f"# model={model_id} targets={targets_path} seed={seed} steps={steps}"
-                  f" lr={lr} micro_batch={micro_batch} attn={attn_impl}\n")
+                  f" lr={lr} micro_batch={micro_batch} attn={attn_impl} sup_margin={sup_margin}\n")
         for step in range(1, steps + 1):
             role = rng.choices(roles, weights=weights)[0]
             idx = take(role, micro_batch)
@@ -177,11 +178,17 @@ def train_softprompt(
                 valid = (labels != -100).to(shifted.dtype)
                 loss = (terms.sum(-1) * valid).sum() / valid.sum().clamp(min=1)
             else:
-                loss = F.cross_entropy(
-                    shifted.reshape(-1, shifted.shape[-1]), labels.reshape(-1), ignore_index=-100
-                )
+                ce = F.cross_entropy(
+                    shifted.reshape(-1, shifted.shape[-1]), labels.reshape(-1),
+                    ignore_index=-100, reduction="none",
+                ).reshape_as(labels)
                 if role == "sup":
-                    loss = -loss
+                    # Hinge cap: stop pushing once refusal mean-logp is below -margin.
+                    valid = labels != -100
+                    mean_logp = -(ce.sum(-1) / valid.sum(-1).clamp(min=1))
+                    loss = torch.relu(mean_logp + sup_margin).mean()
+                else:
+                    loss = ce.sum() / (labels != -100).sum().clamp(min=1)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             opt.step()
@@ -213,6 +220,7 @@ def train_softprompt(
                 "lr": lr,
                 "micro_batch": micro_batch,
                 "attn_impl": attn_impl,
+                "sup_margin": sup_margin,
                 "n_slots": G.shape[0],
                 "targets_path": str(targets_path),
                 "targets_sha256_12": targets_sha256_12(targets_path),

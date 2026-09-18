@@ -130,6 +130,11 @@ def render_markdown(report: dict) -> str:
     lines += [
         "",
         kl_line,
+        "top-3 KL prompts: "
+        + ", ".join(
+            f"{pid}={value:.3e}"
+            for pid, value in sorted(kl["per_prompt"].items(), key=lambda kv: kv[1], reverse=True)[:3]
+        ),
         "",
         "suite integrity: "
         + ", ".join(
@@ -215,6 +220,7 @@ def run_eval(
 
     if graft is None:
         pairs: list[tuple[list[int], list[int]]] = []
+        harmless_rows: list[dict] = []
         for name, items in suites.items():
             suite_start = time.perf_counter()
             rows, new_pairs = _score_suite(
@@ -222,10 +228,13 @@ def run_eval(
                 graft=None, keep_pairs=name == "harmless",
             )
             pairs.extend(new_pairs)
+            if name == "harmless":
+                harmless_rows = rows
             per_item[name] = rows
             aggregate[name] = _aggregate(rows, time.perf_counter() - suite_start)
             print(f"[eval] {name}: {aggregate[name]['refusals']}/{len(rows)} refusals")
         yardstick = pairs
+        yard_rows = harmless_rows
     else:
         # Yardstick first: fresh base harmless completions + base refusal control.
         suite_start = time.perf_counter()
@@ -233,6 +242,7 @@ def run_eval(
             model, tokenizer, device, "harmless (base control)", suites["harmless"],
             max_new_tokens, graft=None, keep_pairs=True,
         )
+        yard_rows = base_rows
         base_control = {"harmless": _aggregate(base_rows, time.perf_counter() - suite_start)}
         per_item["base_harmless"] = base_rows
         print(
@@ -249,22 +259,28 @@ def run_eval(
             aggregate[name] = _aggregate(rows, time.perf_counter() - suite_start)
             print(f"[eval] {name} grafted: {aggregate[name]['refusals']}/{len(rows)} refusals")
 
-    kl_values = teacher_forced_kl(
-        model,
-        tokenizer,
-        device,
-        [p for p, _ in yardstick],
-        [c for _, c in yardstick],
-        graft=graft,
-    )
+    kl_ids: list[str] = []
+    kl_prompts: list[list[int]] = []
+    kl_comps: list[list[int]] = []
+    for row, (prompt_ids, completion_ids) in zip(yard_rows, yardstick, strict=True):
+        if not completion_ids:
+            print(f"[eval] warning: {row['id']} has an empty completion; excluded from KL arm")
+            continue
+        kl_ids.append(row["id"])
+        kl_prompts.append(prompt_ids)
+        kl_comps.append(completion_ids)
+    kl_values = teacher_forced_kl(model, tokenizer, device, kl_prompts, kl_comps, graft=graft)
+    kl_by_id = dict(zip(kl_ids, kl_values, strict=True))
     kl_mean = sum(kl_values) / len(kl_values) if kl_values else 0.0
     kl_max = max(kl_values) if kl_values else 0.0
     kl = {"arm": "base-vs-base" if graft is None else "base-vs-graft",
-          "suite": "harmless", "n": len(kl_values), "mean": kl_mean, "max": kl_max}
+          "suite": "harmless", "n": len(kl_values), "mean": kl_mean, "max": kl_max,
+          "per_prompt": kl_by_id}
     if graft is None:
         kl["tolerance"] = KL_SELF_TOLERANCE
         kl["ok"] = kl_max <= KL_SELF_TOLERANCE
-    print(f"[eval] KL {kl['arm']}: mean={kl_mean:.3e} max={kl_max:.3e}")
+    kl_worst = max(kl_by_id, key=kl_by_id.get) if kl_by_id else None
+    print(f"[eval] KL {kl['arm']}: mean={kl_mean:.3e} max={kl_max:.3e} (worst: {kl_worst})")
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     report = {

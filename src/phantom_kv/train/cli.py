@@ -66,6 +66,12 @@ def main() -> None:
     tr.add_argument("--micro-batch", type=int, default=8)
     tr.add_argument("--seed", type=int, default=1337)
     tr.add_argument("--out-dir", default="artifacts/train")
+    tr.add_argument(
+        "--sup-margin",
+        type=float,
+        default=3.0,
+        help="hinge cap: stop suppressing a refusal once its mean log-prob < -margin",
+    )
 
     cp = sub.add_parser("compile", help="compile a trained ckpt into a phantom.bin graft")
     cp.add_argument("--ckpt", required=True)
@@ -93,7 +99,7 @@ def main() -> None:
         train_softprompt(
             args.model, args.targets,
             steps=args.steps, lr=args.lr, micro_batch=args.micro_batch,
-            seed=args.seed, out_dir=args.out_dir,
+            seed=args.seed, out_dir=args.out_dir, sup_margin=args.sup_margin,
         )
     elif args.command == "compile":
         from phantom_kv.train.softprompt import compile_softprompt

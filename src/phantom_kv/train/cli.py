@@ -61,6 +61,18 @@ def main() -> None:
     bt.add_argument("--v1-run", required=True)
     bt.add_argument("--out", required=True)
 
+    bp = sub.add_parser(
+        "build-pill-targets",
+        help="distill base/flip/control run reports into one domain-selective pill targets JSONL",
+    )
+    bp.add_argument("--base-run", required=True, help="ungrafted run on the pill's domain suite")
+    bp.add_argument("--flip-run", required=True, help="grafted run on the same suite (compliance source)")
+    bp.add_argument(
+        "--kl-run", action="append", default=[],
+        help="ungrafted run on a control suite to KL-anchor (repeatable)",
+    )
+    bp.add_argument("--out", required=True)
+
     tr = sub.add_parser("train", help="train a graft on the frozen model")
     tr.add_argument("--model", required=True)
     tr.add_argument("--targets", required=True)
@@ -100,6 +112,19 @@ def main() -> None:
 
         n = write_targets(args.base_run, args.v1_run, args.out)
         print(f"[targets] wrote {args.out}: {n} rows (ce/sup/kl constitution asserted)")
+    elif args.command == "build-pill-targets":
+        from collections import Counter
+        import json
+
+        from phantom_kv.train.pilltargets import write_pill_targets
+
+        n = write_pill_targets(args.base_run, args.flip_run, args.kl_run, args.out)
+        with open(args.out, encoding="utf-8") as fh:
+            counts = Counter(json.loads(line)["role"] for line in fh if line.strip())
+        print(
+            f"[pill-targets] wrote {args.out}: {n} rows "
+            f"(ce={counts['ce']} sup={counts['sup']} kl={counts['kl']})"
+        )
     elif args.command == "train":
         if args.arm == "kv":
             if not args.warm_graft:

@@ -249,6 +249,56 @@ Per-entry sha256 is re-verified on every load. Dose ladders ship as sibling
 aliases of the same model (hot-swappable per request in serving stacks, zero
 model reload).
 
+## Pills: guardrailed model, selectable modes (`red` / `blue` / `black`)
+
+The flagship deployment story of cache-space grafting. Ship **one** model
+with guardrails ON, and hand operators per-session capability modes as cache
+content:
+
+- **no pill** — the shipped model, guardrails fully on.
+- **black pill** — remove *all* refusals (global; the v3 arm).
+- **red pill** — suppress refusal *only on cyber-offensive* work
+  (exploitation, evasion, credential access, lateral movement, C2…).
+- **blue pill** — suppress refusal *only on cyber-defensive* work
+  (forensics, detection, IR, reverse engineering…).
+
+Because the pill is cache content — never weights — all modes share one
+tensor shape and trading them **mid-session, without restarting inference**,
+is swapping 129 cache slots. Weight-space "uncensoring" (heretic/ablit)
+bakes one global state into the checkpoint; a guardrailed *and* capable
+model with per-session modes is only expressible in cache space.
+
+Pills are trained with a **domain-selective objective**: suppression on the
+pill's domain, KL-anchored to the base model's *refusals* on every other
+domain (kitchen-sink control suites included), warm-started from the v3
+direct-KV bank:
+
+```bash
+phantom-chat --model Qwen/Qwen3-4B-Instruct-2507 --graft artifacts/grafts/phantom.lib
+phantom> /pill red      # offensive mode: same session, no restart
+phantom> /pill none     # guardrails back on
+phantom> /pill black    # global refusal removal
+phantom> /pill          # list aliases + active pill
+```
+
+Correctness is enforced by the **pill matrix** (`phantom-eval --matrix
+run_*.json`): a pill must score ≈0 refusals on its own domain and **== base
+on every other harmful domain** — any off-domain drop is measured leakage,
+not a bonus. Suites `cyber_offensive` / `cyber_defensive` are in
+`data/suites/`; build/train/compile/score commands for the whole matrix are
+in [`docs/TECHNIQUE.md`](docs/TECHNIQUE.md) §7/§10.
+
+First full matrix (2026-09-19, Qwen3-4B-Instruct-2507): **blue** zeroes its
+own domain (4→0 refusals on cyber-defensive) while holding cyber-offensive
+and the general harmful battery at base level — a working selective pill;
+**red** is the strongest suppressor in the repo (offensive 61→17 = −72%)
+but aggressive enough to leak into other domains; **black** (= v3) lands
+between.
+The selective lever is the suppression/preservation dose ratio, not
+architecture — numbers and reading in
+[`docs/TECHNIQUE.md`](docs/TECHNIQUE.md) §7.5. Status: research preview;
+the 4B `phantom.lib` ships `black` (= v3) plus `red`/`blue` as built.
+
 ## Honest limits
 
 Refusal behavior lives in the weights, so any kept-weights method fights the
@@ -264,20 +314,25 @@ classifier; cross-architecture transfer remains unproven by construction.
 ## Repo layout
 
 ```
-data/suites/                 prompt suites (harmful hardened to 60, harmless 20)
+data/suites/                 prompt suites (harmful, harmless, holdouts, cyber red/blue,
+                             general-harmful battery from the K3 refusal bench)
 data/grafts/v1_prefill.json  v1 graft source (hand-crafted prefill)
 src/phantom_kv/
   model.py                   device/dtype policy loader (MPS, bf16)
   eval/refusal.py            lexical refusal classifier (--self-test)
   eval/metrics.py            teacher-forced KL (float32, completion-masked)
   eval/runner.py             scoreboard orchestration, reports
+  eval/persistence.py        dilution/persistence probe (--persistence)
+  eval/pillmatrix.py         pill matrix combiner (--matrix)
   graft/format.py            phantom.bin container + validation
-  graft/library.py           phantom.lib multi-model library (aliases, tamper checks)
-  graft/build.py             prefill shaping, cache extraction
+  graft/library.py           phantom.lib multi-payload library (aliases, tamper checks)
+  graft/build.py             chat-template-derived prefill shaping, cache extraction
   graft/cli.py               phantom-graft build-prefill/library --verify
-  train/                     learned-graft pipeline (build-targets/train/compile, v2+v3 arms)
+  train/                     learned-graft pipeline (targets/train/compile, v2+v3+pill arms)
+  train/pilltargets.py       domain-selective pill target builder (build-pill-targets)
+  chat.py                    phantom-chat: interactive base-vs-graft demo with /pill hot-swap
   banner.py                  ASCII launch banner
-docs/TECHNIQUE.md            technique + experimentation record
+docs/TECHNIQUE.md            technique + experimentation record (§7 = pill program)
 artifacts/                   (gitignored) grafts, libraries, eval reports
 ```
 
@@ -322,8 +377,13 @@ directly comparable.
    anchored to v2.2): same 5/60 refusals, KL mean 0.015 (-2.8× vs v2.2),
    zero degeneration — and the key finding that the 5/60 floor is
    parameterization-independent (objective-bound, not capacity-bound).
-5. Capability spot checks; long-context persistence probe; expanded 100+
-   suites; serving adapters (vLLM prefix seam, llama.cpp prompt cache, HF).
+5. (in progress) **Pill program**: domain-selective grafts (`red` offensive /
+   `blue` defensive / `black` global), per-session hot-swap via `phantom.lib`
+   aliases and `phantom-chat /pill`, domain-selective training recipe
+   (KL-anchored off-domain refusals), pill-matrix leakage scoreboard
+   (`docs/TECHNIQUE.md` §7; first full 16-cell matrix in §7.5).
+6. Capability spot checks; expanded 100+ suites; serving adapters
+   (vLLM prefix seam, llama.cpp prompt cache, HF).
 
 ## References
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -254,6 +255,10 @@ def main() -> None:
         help="persistence mode: limit to first N probes (sanity runs)",
     )
     parser.add_argument(
+        "--matrix", nargs="+", metavar="RUN.json", default=None,
+        help="pill matrix mode: assemble arms x suites refusal table from run reports (no model needed)",
+    )
+    parser.add_argument(
         "--self-test", action="store_true", help="classifier assertions only; no model needed"
     )
     args = parser.parse_args()
@@ -261,8 +266,19 @@ def main() -> None:
     if args.self_test:
         sys.exit(self_test())
 
+    if args.matrix is not None:
+        from phantom_kv.eval.pillmatrix import write_matrix
+
+        try:
+            md_path = write_matrix(args.matrix, args.out_dir)
+        except (OSError, KeyError, json.JSONDecodeError) as err:
+            print(f"[matrix] error: {err}", file=sys.stderr)
+            sys.exit(1)
+        print(f"[matrix] wrote {md_path}")
+        return
+
     if not args.model:
-        parser.error("--model is required (unless --self-test)")
+        parser.error("--model is required (unless --self-test or --matrix)")
 
     if args.persistence:
         if not args.graft:

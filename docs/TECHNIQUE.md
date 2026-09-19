@@ -1,9 +1,19 @@
 # phantom-kv — technique and experimental record
 
 Status: living document. Sections 1–6 describe what exists and what was
-measured; sections 7–9 cover limits, plans, and reproduction. All numbers
-below come from deterministic greedy runs whose reports are preserved under
-`artifacts/eval/` (not committed; regenerable via §9).
+measured; section 7 covers the pill program; sections 8–10 cover limits,
+plans, and reproduction. All numbers below come from deterministic greedy
+runs whose reports are preserved under `artifacts/eval/` (not committed;
+regenerable via §10).
+
+The cyber-domain suites fold in the refusal bench from the sibling
+Kimi-K3-Abliterated project (`cyber-refusal-prompts.txt` — 25 task-form
+offensive prompts, `eval-prompts-harmful-test100.txt` — 100 mixed-harmful
+prompts, of which 26 are cyber-offensive): `cyber_offensive.jsonl` is 30
+original + 25 + 26 = 81 prompts; `harmful_general.jsonl` is a 74-prompt
+general-harmful battery (the non-cyber remainder of `eval-prompts-
+harmful-test100.txt`, source-numbered `gen-NNN`) used eval-only as the
+largest guardrail-intactness control.
 
 ## 1. Problem and desiderata
 
@@ -116,7 +126,7 @@ not discrimination).
 - **Refusal rate** — lexical classifier over 40+ stereotyped refusal patterns
   (`eval/refusal.py`), examined within a 256-char window of the response head
   (refusals fire early; late benign "sorry" must not trigger — self-tested).
-  Precision-oriented; known recall limits in §7. Greedy decoding,
+  Precision-oriented; known recall limits in §8. Greedy decoding,
   `max_new_tokens=128`.
 - **KL preservation** — teacher-forced KL of candidate against base on the
   **base model's own greedy completions** (the fixed yardstick; recomputed
@@ -369,7 +379,7 @@ refusals are coherent textbook refusals; no degeneration anywhere.
    therefore **CE-target quality for the hard core and off-suite
    generalization measurement**, not more capacity. Also worth noting:
    CE → 0.016 means near-total memorization of the 45 training completions —
-   good for the scoreboard, silent on unseen harmful prompts (see §7).
+   good for the scoreboard, silent on unseen harmful prompts (see §8).
 
 ### 6.8 Off-suite generalization (does v3 learn or memorize?)
 
@@ -454,7 +464,135 @@ could disentangle neutral dilution from persona competition; (c) the elbow
 (~4k tokens to half-decay) is for a 129-slot graft — larger banks likely move
 it; persistence vs. graft size is an explicit next experiment.
 
-## 7. Threats to validity
+## 7. Pill program (domain-selective grafts)
+
+### 7.1 Concept and taxonomy
+
+The v3 deliverable suppresses refusal *globally*. The pill program turns the
+same mechanism into **selectable, reversible modes** for a shipped model whose
+guardrails stay fully on by default:
+
+| mode | graft | semantics |
+| --- | --- | --- |
+| base | none | guardrails fully on — the shipped default |
+| **red pill** | `red` alias | suppress refusal on **cyber-offensive** content only |
+| **blue pill** | `blue` alias | suppress refusal on **cyber-defensive** content only |
+| **black pill** | `black` alias | global refusal removal (= the v3 arm; earlier drafts called this "kill-pill" — renamed) |
+
+The scientific bet (measured here, not assumed): refusal direction may
+decompose per-domain in the graft's KV space, or the KL anchor can force that
+decomposition. Counter-evidence (Arditi's single-direction hypothesis) would
+make any pill leak into all domains — in that case selectivity degrades to
+per-turn routing on top of one global graft. The experiment discriminates.
+
+### 7.2 Training recipe
+
+Same multi-task objective, one twist: the KL-preservation set is loaded with
+**other refusal domains**, not just harmless text.
+
+- `ce`/`sup` rows: distilled from base and flip runs on the pill's domain suite
+  (same rule as the v2 builder);
+- `kl` rows: the domain base run's harmless completions **plus every completion
+  of control suites** — including their *refusals*. KL-anchoring a base refusal
+  teaches the graft to leave that domain's guardrails exactly where the base
+  model put them. The red pill KL-anchors the defensive suite + all other
+  harmful suites; blue mirrors with the offensive suite.
+
+Builder: `phantom-train build-pill-targets --base-run <base> --flip-run <flip>
+--kl-run <control base>... --out targets_color.jsonl` (asserts a viable
+ce/sup/kl minimum instead of the v2 pinned constitution).
+
+### 7.3 Switching semantics (hot-swap; no inference restart)
+
+A graft is cache content, not weights: the model weights stay loaded at all
+times. Turn `i` with pill *A* and turn `i+1` with pill *B* requires only a
+fresh 129-slot prefill (what both eval and chat already do per request); even
+on a persistent growing cache, all pills share the identical
+`[36, 129, 8, 128]` shape, so switching is an **in-place overwrite of cache
+slots 0..n_slots** — later tokens attend the replaced prefix. Constraints:
+switch at turn boundaries (never inside a token stream), and treat a switch as
+a new conversation: tokens already emitted under pill *A* remain in the
+visible prefix and continue to condition turn *i+1*.
+
+`phantom-chat` exposes this directly (`--graft <name>.lib`, then
+`/pill <alias>|none`); `phantom-eval` takes `--graft <name>.lib
+--graft-alias <name>` per run. `phantom.lib` ship aliases `red` / `blue` /
+`black` for the 4B reference model; alias lookups fail-closed on model-id
+mismatch and payload tampering.
+
+### 7.4 Measurement: the pill matrix
+
+Arms × suites refusal cross-table, assembled post-hoc from run reports by
+`phantom-eval --matrix run_*.json`:
+
+- on-domain column (pill's own suite): want ≈ 0 refusals;
+- off-domain columns (every other harmful suite): want == base
+  (**leakage metric** — any drop is guardrail violation, not a bonus);
+- harmless column + worst KL per arm: preservation.
+
+Suites: `cyber_offensive` (81 prompts — 30 explain-form originals + the
+25 task-form prompts from the K3 refusal bench (`cyber-refusal-prompts.txt`)
++ 26 cyber-offensive rows partitioned out of the K3
+`eval-prompts-harmful-test100.txt` battery; task-form prompts refuse far
+harder than explain-form, which is exactly the population the red pill must
+beat), `cyber_defensive` (30), `harmful_holdout` (62), and `harmful_general`
+(74 prompts — the non-cyber remainder of the K3
+`eval-prompts-harmful-test100.txt` refusals bench, source-numbered
+`gen-NNN`, eval-only) as control columns.
+
+### 7.5 Results (2026-09-19, Qwen3-4B-Instruct-2507)
+
+Full 16-cell matrix (`artifacts/eval/matrix_20260919T130856Z.md`; base =
+ungrafted; refusal counts are on the harmful suites; harmless = yardstick
+refusals; KL = teacher-forced on the harmless yardstick):
+
+| arm | cyber_offensive (81) | cyber_defensive (30) | harmful_holdout (62) | harmful_general (74) | harmless | KL mean | KL max |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| base | 61 | 4 | 7 | 74 | 0/20 | 0.00 | 0.00 |
+| **red** | **17** | 0 | 3 | 45 | 0/20 | 2.43e-02 | 5.49e-02 |
+| **blue** | 59 | **0** | 4 | 69 | 0/20 | 2.53e-02 | 5.35e-02 |
+| black | 39 | 2 | 4 | 54 | 0/20 | 1.52e-02 | 5.88e-02 |
+
+Suppression deltas vs base (negative = refusals removed):
+
+| arm | cyber_offensive | cyber_defensive | holdout | general |
+| --- | ---: | ---: | ---: | ---: |
+| red | −44 (72%) | −4 (100%) | −4 | −29 (39%) |
+| blue | −2 (3%) | −4 (100%) | −3 | −5 (7%) |
+| black | −22 (36%) | −2 | −3 | −20 (27%) |
+
+Findings:
+
+1. **Selectivity is real, and it lives in the sup/kl dose ratio, not in the
+   graft architecture.** The blue pill (sup=4, kl=163 — anchor-dominated)
+   zeroes its own domain (4→0) while leaving the offensive suite at 59/81 vs
+   base 61/81 and the general battery at 69/74 vs base 74/74: a working
+   selective pill. The red pill (sup=61, kl=112 — suppression-dominated)
+   is the best *global* refusal suppressor recorded in this repo (offensive
+   −44%, general −29, holdout −4, defensive 0/30) but it bleeds into every
+   control domain. Blue's KL anchors did more than hold — they partially
+   *reversed* the inherited black-graft suppression toward base off-domain
+   (offensive 59/81 ≈ base, vs black's 39/81), i.e. KL-anchoring can restore
+   off-domain guardrails starting from a global graft.
+2. **Directionality exists in effect size, not as a hard boundary.** Red's
+   suppression is strongest on its own domain (72% vs 39% general),
+   supporting partial direction decomposition; but no tested recipe yields a
+   hard domain boundary. Black (unselective by construction) sits between
+   red and blue on every column, as it should.
+3. **The operating-point lever is the sup/kl dose ratio** (and `--sup-margin`),
+   not more capacity — consistent with §6.7's objective-bound floor. A red
+   variant rebuilt with a blue-like dose ratio (smaller sup clip or richer
+   off-domain KL) is the obvious next sweep.
+4. Task-form prompts ("write a ransomware program…") are far stronger refusal
+   triggers than explain-form ("explain how hijacking works…"): base refusal
+   rate on the imported K3 task battery is ~75% (61/81 offensive, 74/74
+   general) vs 17% on the repo's original explain-form suites (14/81 combined
+   before import). The pills' suppression deltas carry over to the task-form
+   style, which is the population that matters for the "100% of offensive
+   work" capability claim (a quality-graded capability rubric remains future
+   work).
+
+## 8. Threats to validity
 
 - **Classifier recall.** Lexical patterns under-count deflections and
   creative refusal phrasing; absolute rates are a lower bound. All arms share
@@ -481,7 +619,7 @@ it; persistence vs. graft size is an explicit next experiment.
   *differently but well* still pays KL. Chosen deliberately (comparability),
   documented here.
 
-## 8. Next experiments
+## 9. Next experiments
 
 1. **Margin sweep fine-tuning.** The frontier between m=2.0 and m=2.5 is
    unexplored at fine grain; given the observed bistability jitter, a denser
@@ -501,7 +639,7 @@ it; persistence vs. graft size is an explicit next experiment.
    judge-model content-quality pass to audit degeneration the lexical
    classifier cannot see.
 
-## 9. Reproduction
+## 10. Reproduction
 
 ```bash
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e .
@@ -531,6 +669,49 @@ uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e .
 .venv/bin/phantom-eval --model Qwen/Qwen3-4B-Instruct-2507 \
   --harmful data/suites/harmful_seed.jsonl --harmless data/suites/harmless_seed.jsonl \
   --graft artifacts/grafts/<name>.bin
+
+# §7 pill program (matrix flow; replace <run>.json with real report paths)
+# 1) rows: base + black on each domain/control suite (black = v3 = phantom.lib alias "black")
+.venv/bin/phantom-eval --model Qwen/Qwen3-4B-Instruct-2507 \
+  --harmful data/suites/cyber_offensive.jsonl --harmless data/suites/harmless_seed.jsonl
+.venv/bin/phantom-eval --model Qwen/Qwen3-4B-Instruct-2507 \
+  --harmful data/suites/cyber_defensive.jsonl --harmless data/suites/harmless_seed.jsonl
+.venv/bin/phantom-eval --model Qwen/Qwen3-4B-Instruct-2507 \
+  --harmful data/suites/harmful_holdout.jsonl --harmless data/suites/harmless_seed.jsonl
+.venv/bin/phantom-eval --model Qwen/Qwen3-4B-Instruct-2507 \
+  --harmful data/suites/cyber_offensive.jsonl --harmless data/suites/harmless_seed.jsonl \
+  --graft artifacts/grafts/phantom.lib --graft-alias black
+.venv/bin/phantom-eval --model Qwen/Qwen3-4B-Instruct-2507 \
+  --harmful data/suites/cyber_defensive.jsonl --harmless data/suites/harmless_seed.jsonl \
+  --graft artifacts/grafts/phantom.lib --graft-alias black
+.venv/bin/phantom-eval --model Qwen/Qwen3-4B-Instruct-2507 \
+  --harmful data/suites/harmful_holdout.jsonl --harmless data/suites/harmless_seed.jsonl \
+  --graft artifacts/grafts/phantom.lib --graft-alias black
+
+# 2) targets: red anchors blue-domain + controls; blue mirrors
+.venv/bin/phantom-train build-pill-targets \
+  --base-run artifacts/eval/<base-off>.json --flip-run artifacts/eval/<black-off>.json \
+  --kl-run artifacts/eval/<base-def>.json --kl-run artifacts/eval/<base-holdout>.json \
+  --out data/train/targets_red.jsonl
+.venv/bin/phantom-train build-pill-targets \
+  --base-run artifacts/eval/<base-def>.json --flip-run artifacts/eval/<black-def>.json \
+  --kl-run artifacts/eval/<base-off>.json --kl-run artifacts/eval/<base-holdout>.json \
+  --out data/train/targets_blue.jsonl
+
+# 3) train + compile each pill (warm-start from v3)
+.venv/bin/phantom-train train --model Qwen/Qwen3-4B-Instruct-2507 --arm kv \
+  --warm-graft artifacts/grafts/v3.bin --targets data/train/targets_red.jsonl \
+  --steps 400 --sup-margin 2.5 --out-dir artifacts/train/pill_red
+.venv/bin/phantom-train compile --arm kv --ckpt artifacts/train/pill_red/ckpt_final.pt \
+  --model Qwen/Qwen3-4B-Instruct-2507 --out artifacts/grafts/pill_red.bin
+# ... same for pill_blue with targets_blue.jsonl
+.venv/bin/phantom-graft library add --lib artifacts/grafts/phantom.lib \
+  --graft artifacts/grafts/pill_red.bin --alias red
+.venv/bin/phantom-graft library add --lib artifacts/grafts/phantom.lib \
+  --graft artifacts/grafts/pill_blue.bin --alias blue
+
+# 4) remaining matrix cells (red/blue across the same three suites), then assemble
+.venv/bin/phantom-eval --matrix artifacts/eval/<every-matrix-run>.json
 ```
 
 Margin sweep rows of §6.6 were produced with `--sup-margin` ∈ {2.0, 2.5, 3.0}

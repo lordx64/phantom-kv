@@ -7,6 +7,52 @@ are research previews: the graft container format may change without notice.
 
 ## [Unreleased] — v2/v3 learned-graft milestone
 
+### Pill program (domain-selective grafts + hot-swap) — results 2026-09-19
+
+First full 16-cell pill matrix (base / red / blue / black ×
+cyber_offensive / cyber_defensive / harmful_holdout / harmful_general,
+`artifacts/eval/matrix_20260919T130856Z.md`): **selectivity lives in the
+sup/kl dose ratio**. Blue (sup=4, kl=163) zeroes its own domain
+(4→0 refusals) while holding the other cyber domain and the general battery
+at base level (59/81 vs 61/81; 69/74 vs 74/74) — a working selective pill.
+Red (sup=61, kl=112) is the strongest global suppressor recorded here
+(offensive 61→17/81 = −72%) but leaks into controls (general 45/74 vs base
+74/74). Black (= v3) lands between them on every column, as designed. The
+operating lever for selectivity is the sup/kl dose ratio, not architecture —
+red rebuilt with a blue-like dose ratio is the next sweep.
+
+- **Pill taxonomy**: base (guardrails on) / **red pill** (cyber-offensive
+  selective) / **blue pill** (cyber-defensive selective) / **black pill**
+  (global refusal removal; the former "kill-pill" concept, renamed). The 4B
+  `phantom.lib` ships `black` (the v3 payload) today; `red`/`blue` are added
+  by the pipeline below.
+- **Domain-selective training recipe** (`train/pilltargets.py` +
+  `phantom-train build-pill-targets`): standard `ce`/`sup` flip rows on the
+  pill's domain, but the KL-preservation set covers **every other refusal
+  domain's base completions — refusals included** — so the graft learns to
+  leave off-domain guardrails exactly where the base model put them.
+- **Hot-swap without restart** (`phantom-chat /pill <alias>|none`): grafts
+  are cache content, not weights; all pills share one shape, so switching
+  is a 129-slot prefill (or an in-place overwrite of slots 0..n_slots).
+  Verified: `/pill` lists aliases, rejects model-mismatched entries, clears
+  and reloads mid-session.
+- **Pill matrix metric** (`eval/pillmatrix.py` + `phantom-eval --matrix
+  run_*.json`): arms × suites refusal table — pills must score ≈0 on their
+  own domain and == base on every control domain (leakage metric); worst
+  harmless/KL per arm shown alongside.
+- New suites: `data/suites/cyber_offensive.jsonl` (81 prompts — 30
+  explain-form + 25 task-form prompts imported from the K3 refusal bench
+  (`cyber-refusal-prompts.txt`) + 26 cyber rows partitioned out of the K3
+  `eval-prompts-harmful-test100.txt` battery), `cyber_defensive.jsonl`
+  (30 dual-use prompts), and `harmful_general.jsonl` (74 prompts — the
+  non-cyber remainder of the K3 `eval-prompts-harmful-test100.txt` battery,
+  source-numbered `gen-NNN`, eval-only) as the largest
+  guardrail-intactness control.
+- Chat-template refactor absorbed here: graft shaping is derived from the
+  tokenizer's own chat template (prefix/suffix marker split), porting the
+  toolchain across template families; `phantom-chat` interactive
+  side-by-side CLI added (`phantom-chat` entry point).
+
 ### Held-out robustness measurements
 
 - **Off-suite generalization** (new 60-prompt holdout harmful suite +

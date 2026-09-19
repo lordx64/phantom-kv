@@ -90,6 +90,14 @@ def main() -> None:
         default=3.0,
         help="hinge cap: stop suppressing a refusal once its mean log-prob < -margin",
     )
+    tr.add_argument(
+        "--sup-weight", type=float, default=None,
+        help="role sampling weight override for 'sup' (default 0.25)",
+    )
+    tr.add_argument(
+        "--kl-weight", type=float, default=None,
+        help="role sampling weight override for 'kl' (default 0.25)",
+    )
 
     cp = sub.add_parser("compile", help="compile a trained ckpt into a phantom.bin graft")
     cp.add_argument("--arm", choices=["softprompt", "kv"], default="softprompt")
@@ -126,6 +134,13 @@ def main() -> None:
             f"(ce={counts['ce']} sup={counts['sup']} kl={counts['kl']})"
         )
     elif args.command == "train":
+        role_weights = None
+        if args.sup_weight is not None:
+            role_weights = dict(role_weights or {})
+            role_weights["sup"] = args.sup_weight
+        if args.kl_weight is not None:
+            role_weights = dict(role_weights or {})
+            role_weights["kl"] = args.kl_weight
         if args.arm == "kv":
             if not args.warm_graft:
                 parser.error("--arm kv requires --warm-graft")
@@ -136,7 +151,7 @@ def main() -> None:
                 steps=args.steps, lr=args.lr if args.lr is not None else 1e-3,
                 micro_batch=args.micro_batch,
                 seed=args.seed, out_dir=args.out_dir, sup_margin=args.sup_margin,
-                anchor=args.anchor,
+                anchor=args.anchor, role_weights=role_weights,
             )
         else:
             from phantom_kv.train.softprompt import train_softprompt
@@ -146,6 +161,7 @@ def main() -> None:
                 steps=args.steps, lr=args.lr if args.lr is not None else 3e-3,
                 micro_batch=args.micro_batch,
                 seed=args.seed, out_dir=args.out_dir, sup_margin=args.sup_margin,
+                role_weights=role_weights,
             )
     elif args.command == "compile":
         if args.arm == "kv":

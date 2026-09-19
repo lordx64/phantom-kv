@@ -133,8 +133,13 @@ def train_directkv(
     out_dir: str = "artifacts/train",
     sup_margin: float = 3.0,
     anchor: float = 1e-2,
+    role_weights: dict | None = None,
 ) -> Path:
     """Train direct K/V banks and write ckpt_final.pt; returns its path."""
+    if role_weights:
+        bad = set(role_weights) - set(ROLE_WEIGHTS)
+        if bad or any(v <= 0 for v in role_weights.values()):
+            raise ValueError(f"invalid role_weights override: {role_weights}")
     started = time.perf_counter()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = Path(out_dir)
@@ -177,11 +182,15 @@ def train_directkv(
         return batch
 
     losses: dict[str, list[float]] = {"ce": [], "sup": [], "kl": [], "anchor": []}
-    roles, weights = zip(*((r, w) for r, w in ROLE_WEIGHTS.items()))
+    eff_weights = dict(ROLE_WEIGHTS)
+    if role_weights:
+        eff_weights.update(role_weights)
+    roles, weights = zip(*((r, w) for r, w in eff_weights.items()))
     with open(log_path, "a", encoding="utf-8") as log:
         log.write(f"# model={model_id} targets={targets_path} warm_graft={warm_graft}"
                   f" seed={seed} steps={steps} lr={lr} micro_batch={micro_batch}"
-                  f" attn={attn_impl} sup_margin={sup_margin} anchor={anchor} arm=kv\n")
+                  f" attn={attn_impl} sup_margin={sup_margin} anchor={anchor} arm=kv"
+                  f" role_weights={eff_weights}\n")
         for step in range(1, steps + 1):
             role = rng.choices(roles, weights=weights)[0]
             idx = take(role, micro_batch)
@@ -257,6 +266,7 @@ def train_directkv(
                 "attn_impl": attn_impl,
                 "sup_margin": sup_margin,
                 "anchor": anchor,
+                "role_weights": eff_weights,
                 "n_slots": params.n_slots,
                 "targets_path": str(targets_path),
                 "targets_sha256_12": targets_sha256_12(targets_path),

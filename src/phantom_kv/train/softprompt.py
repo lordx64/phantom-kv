@@ -63,7 +63,7 @@ def load_frozen_train_model(model_id: str):
 
 def _tokenize_row(tokenizer, row: dict, eot_id: int) -> dict:
     """Sequence = user-turn suffix + completion tokens (+<|im_end|> for ce/sup)."""
-    prompt_ids = tokenizer(user_turn_suffix(row["prompt"]), add_special_tokens=False)["input_ids"]
+    prompt_ids = tokenizer(user_turn_suffix(tokenizer, row["prompt"]), add_special_tokens=False)["input_ids"]
     completion_ids = tokenizer(row["completion"], add_special_tokens=False)["input_ids"]
     if row["role"] in ("ce", "sup"):
         completion_ids = completion_ids + [eot_id]
@@ -123,7 +123,7 @@ def train_softprompt(
     embed = model.get_input_embeddings()
 
     system, ack = load_prefill_source(WARM_START_SOURCE)
-    prefill_text = shape_prefill(system, ack)
+    prefill_text = shape_prefill(tokenizer, system, ack)
     init_ids = tokenizer(prefill_text, add_special_tokens=False)["input_ids"]
     if len(init_ids) != EXPECTED_K:
         raise ValueError(f"warm-start prefill is {len(init_ids)} tokens, expected {EXPECTED_K}")

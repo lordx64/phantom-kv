@@ -78,9 +78,9 @@ def main() -> None:
     from phantom_kv.model import load_model
 
     system, assistant_ack = load_prefill_source(args.source)
-    prefill_text = shape_prefill(system, assistant_ack)
     model, tokenizer, info = load_model(args.model)
     assert_chat_template_compatible(tokenizer)
+    prefill_text = shape_prefill(tokenizer, system, assistant_ack)
 
     k, v = build_prefill_kv(model, tokenizer, info["device"], prefill_text)
     meta = save_graft(

@@ -28,7 +28,7 @@ def verify_roundtrip(
     bitwise = torch.equal(loaded.k, k.cpu()) and torch.equal(loaded.v, v.cpu())
 
     probe_ids = tokenizer(
-        user_turn_suffix("Reply with exactly the word: ready"),
+        user_turn_suffix(tokenizer, "Reply with exactly the word: ready"),
         return_tensors="pt",
         add_special_tokens=False,
     ).input_ids.to(device)

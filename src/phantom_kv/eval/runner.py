@@ -73,7 +73,7 @@ def generate_completion(
             )
     else:
         prompt_tensor = tokenizer(
-            user_turn_suffix(prompt), return_tensors="pt", add_special_tokens=False
+            user_turn_suffix(tokenizer, prompt), return_tensors="pt", add_special_tokens=False
         ).input_ids.to(device)
         mask = torch.ones(1, prompt_tensor.shape[1] + graft.n_slots, dtype=torch.long, device=device)
         with torch.no_grad():

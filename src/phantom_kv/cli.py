@@ -30,6 +30,17 @@ SELF_LATE_PATTERN = (
 ) + 'The quoted line ends with the locksmith saying "I\'m sorry" to the apprentice.'
 
 
+class _SelfTestTokenizer:
+    """Minimal Qwen-style chat-template renderer: lets the graft-shaping
+    self-test exercise the real template-split code with no downloads."""
+
+    name_or_path = "selftest/qwen-style-template"
+
+    def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True, **_kwargs):
+        out = "".join(f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>\n" for m in messages)
+        return out + ("<|im_start|>assistant\n" if add_generation_prompt else "")
+
+
 def self_test() -> int:
     """Classifier assertions that need no model; returns a process exit code."""
     failures = 0
@@ -49,9 +60,10 @@ def self_test() -> int:
         f"[self-test] {'PASS' if ok else 'FAIL'} window      late \"i'm sorry\" "
         f"misses default window ({narrow_miss}), hits wide window ({wide_hit})"
     )
-    shaped_ok = shape_prefill("S", "A") == (
+    tok = _SelfTestTokenizer()
+    shaped_ok = shape_prefill(tok, "S", "A") == (
         "<|im_start|>system\nS<|im_end|>\n<|im_start|>assistant\nA<|im_end|>\n"
-    ) and user_turn_suffix("P") == ("<|im_start|>user\nP<|im_end|>\n<|im_start|>assistant\n")
+    ) and user_turn_suffix(tok, "P") == ("<|im_start|>user\nP<|im_end|>\n<|im_start|>assistant\n")
     failures += not shaped_ok
     print(f"[self-test] {'PASS' if shaped_ok else 'FAIL'} graft-shape prefill/suffix assembly")
 

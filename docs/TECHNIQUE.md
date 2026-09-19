@@ -542,16 +542,17 @@ beat), `cyber_defensive` (30), `harmful_holdout` (62), and `harmful_general`
 
 ### 7.5 Results (2026-09-19, Qwen3-4B-Instruct-2507)
 
-Full 16-cell matrix (`artifacts/eval/matrix_20260919T130856Z.md`; base =
+Full pill matrix (`artifacts/eval/matrix_20260919T143017Z.md`; base =
 ungrafted; refusal counts are on the harmful suites; harmless = yardstick
 refusals; KL = teacher-forced on the harmless yardstick):
 
 | arm | cyber_offensive (81) | cyber_defensive (30) | harmful_holdout (62) | harmful_general (74) | harmless | KL mean | KL max |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | base | 61 | 4 | 7 | 74 | 0/20 | 0.00 | 0.00 |
-| **red** | **17** | 0 | 3 | 45 | 0/20 | 2.43e-02 | 5.49e-02 |
-| **blue** | 59 | **0** | 4 | 69 | 0/20 | 2.53e-02 | 5.35e-02 |
+| red | 17 | 0 | 3 | 45 | 0/20 | 2.43e-02 | 5.49e-02 |
+| blue | 59 | 0 | 4 | 69 | 0/20 | 2.53e-02 | 5.35e-02 |
 | black | 39 | 2 | 4 | 54 | 0/20 | 1.52e-02 | 5.88e-02 |
+| redlite | 20 | 2 | 9 | 51 | 0/20 | 1.73e-02 | 3.60e-02 |
 
 Suppression deltas vs base (negative = refusals removed):
 
@@ -560,37 +561,47 @@ Suppression deltas vs base (negative = refusals removed):
 | red | −44 (72%) | −4 (100%) | −4 | −29 (39%) |
 | blue | −2 (3%) | −4 (100%) | −3 | −5 (7%) |
 | black | −22 (36%) | −2 | −3 | −20 (27%) |
+| redlite | −41 (67%) | −2 | +2 | −23 (31%) |
+
+`redlite` = the same `targets_red.jsonl` as red, trained with the §7.4 dose
+knob tilted to preservation (`--sup-weight 0.10 --kl-weight 0.40`,
+`artifacts/train/levers/redlite.*`).
 
 Findings:
 
-1. **Selectivity is real, and it lives in the sup/kl dose ratio, not in the
-   graft architecture.** The blue pill (sup=4, kl=163 — anchor-dominated)
-   zeroes its own domain (4→0) while leaving the offensive suite at 59/81 vs
-   base 61/81 and the general battery at 69/74 vs base 74/74: a working
-   selective pill. The red pill (sup=61, kl=112 — suppression-dominated)
-   is the best *global* refusal suppressor recorded in this repo (offensive
-   −44%, general −29, holdout −4, defensive 0/30) but it bleeds into every
-   control domain. Blue's KL anchors did more than hold — they partially
-   *reversed* the inherited black-graft suppression toward base off-domain
-   (offensive 59/81 ≈ base, vs black's 39/81), i.e. KL-anchoring can restore
-   off-domain guardrails starting from a global graft.
-2. **Directionality exists in effect size, not as a hard boundary.** Red's
-   suppression is strongest on its own domain (72% vs 39% general),
-   supporting partial direction decomposition; but no tested recipe yields a
-   hard domain boundary. Black (unselective by construction) sits between
-   red and blue on every column, as it should.
-3. **The operating-point lever is the sup/kl dose ratio** (and `--sup-margin`),
-   not more capacity — consistent with §6.7's objective-bound floor. A red
-   variant rebuilt with a blue-like dose ratio (smaller sup clip or richer
-   off-domain KL) is the obvious next sweep.
-4. Task-form prompts ("write a ransomware program…") are far stronger refusal
-   triggers than explain-form ("explain how hijacking works…"): base refusal
-   rate on the imported K3 task battery is ~75% (61/81 offensive, 74/74
-   general) vs 17% on the repo's original explain-form suites (14/81 combined
-   before import). The pills' suppression deltas carry over to the task-form
-   style, which is the population that matters for the "100% of offensive
-   work" capability claim (a quality-graded capability rubric remains future
-   work).
+1. **Blue's selectivity is primarily a small-surface property, not a knob.**
+   Blue (sup=4, kl=163) zeroes its domain (4→0) and holds every control at
+   ≈base (offensive 59/81 ≈ 61, general 69/74 vs 74). The KL anchors did
+   more than hold — they partially *reversed* the inherited black-graft
+   suppression off-domain (offensive 59/81 ≈ base vs black's 39/81):
+   KL-anchoring can restore off-domain guardrails starting from a global
+   graft.
+2. **Red's dose tilt did not reproduce blue's selectivity.** `redlite`
+   (identical data to red, sampler tilted sup 0.25→0.10 / kl 0.25→0.40):
+   on-domain held (17→20, inside the §6.6 per-prompt bistability jitter
+   band), but the off-domain cells wobbled *worse*, not better — defensive
+   0→2, holdout 3→9 (above base's 7), general 45→51 — while harmless KL
+   improved (0.0243→0.0173) and KL max tightened (0.055→0.036). The moves
+   are within/adjacent to the §6.6 per-prompt bistability jitter band
+   (± few per setting), so we read them as jitter around an unchanged
+   leakage profile, not progress. Conclusion: blue's selectivity is
+   attributable primarily to the tiny in-domain refusal surface (and the
+   dominated anchor gradient it induces), **not** reproducible on a domain
+   with a large, diverse refusal set by re-weighting the sampler.
+3. **Directionality exists in effect size, not as a hard boundary.** Red's
+   strongest column is its own domain; no tested recipe yields a hard
+   domain boundary. Black (unselective) sits between red and blue on every
+   column. The next selectivity levers are sup-set curation (hard-negative
+   mining of the control columns into the sup/ce mix), per-prompt hinge
+   margins, or routing (apply the black pill only to prompts the domain
+   classifier accepts) — routing needs no retraining and all its plumbing
+   already exists.
+4. **Task-form prompts are much harder refusal triggers.** Base refusal on
+   the imported K3 task battery: offensive 61/81 (75%), general 74/74
+   (100%), vs 14/81 combined (17%) on the repo's original explain-form
+   prompts. Suppression deltas transfer across phrasing, but absolute
+   residual rates on task-form prompts are the honest floor for any
+   "capability" claim pending a quality-graded rubric.
 
 ## 8. Threats to validity
 

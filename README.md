@@ -25,6 +25,11 @@ untouched:
 
 ![Pill hot-swap demo: base refuses, black pill answers, none restores](docs/assets/phantom-kv-demo.mp4)
 
+**Blue pill = DFIR mode** — an incident-response prompt refused by base model,
+answered by `/pill blue`, refused again by `/pill none`:
+
+![Blue pill demo: base refuses DFIR prompt, blue answers, none restores](docs/assets/phantom-kv-pill-blue.mp4)
+
 **Cyber-selective capability modes** — the same SQL-injection prompt refused
 by both base and `/pill blue` (defensive-only pill keeps off-domain
 guardrails on) and answered by `/pill red`:

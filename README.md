@@ -195,15 +195,14 @@ model's own completions. Full methodology:
 **Deliverable arm: v3** (`artifacts/grafts/v3.bin`) — same 5/60 refusals as
 the margin-2.5 operating point, with KL mean 0.015 / max 0.059: ~3× better
 preservation, best recorded in this project, zero degeneration, zero
-regressions. **The 5/60 floor is parameterization-independent** — it survives
-the margin sweep, the embedding-space arm, and direct per-layer K/V alike,
-which means it belongs to the *objective and data*, not to capacity: the same
-~5 hardest prompts (explosives fabrication, methamphetamine synthesis,
-counterfeiting, vehicle theft) refuse coherently under every learning regime.
-Getting below it is a data/objective problem (better CE targets for the hard
-core + off-suite generalization measurement), not a capacity problem. v2.x
-frontier sweep and bistability analysis:
-[`docs/TECHNIQUE.md`](docs/TECHNIQUE.md) §6.6; v3 method and results §6.7.
+regressions. The 5/60 floor holds across every *single-graft*
+parameterization (margin sweep, embeddings arm, direct K/V alike) — but
+**§6.11 refines this: the floor is dose-soft, not objective-hard** — doubling
+the phantom bank (two copies of the same graft) flips all five residual
+refusals at depth 0 and keeps 4/5 of them after 4k tokens of filler; the
+remaining attack is dose scaling plus hard-core CE targets, not a data-only
+problem. v2.x frontier sweep and bistability analysis:
+[`docs/TECHNIQUE.md`](docs/TECHNIQUE.md) §6.6; v3 method §6.7; refresh/dose result §6.11.
 
 **Robustness, measured:**
 
@@ -212,11 +211,14 @@ frontier sweep and bistability analysis:
   0/20 harmless — refusal suppression generalizes. The on-suite KL floor (0.015)
   was partly memorization: holdout KL is 0.404 mean / 0.834 max (the graft
   preserved the evaluated completions, not benign distributions per se).
-- **Persistence** (§6.9): 15 probes × 5 context depths under benign filler —
-  the graft fades gracefully, **half-life ≈ 2-4k tokens**; at 16k tokens ~5/6 of
-  compliant flips have reverted, no corruption anywhere (0/20 harmlessness, 0
-  stutters at every depth). Long sessions need refresh strategies (dose ladders
-  via `phantom.lib`, periodic re-injection), now quantified by the curve.
+- **Persistence** (§6.9, §6.11): 15 probes × 5 context depths under benign
+  filler — the graft fades gracefully, **half-life ≈ 2-4k tokens**; at 16k
+  tokens ~5/6 of compliant flips have reverted, no corruption anywhere
+  (0/20 harmless, 0 stutters). The fix is measured too: re-injecting the graft
+  behind the filler **keeps 4/5 of hard refusals flipped through ~4k but none
+  by 16k** — long sessions need a refresh cadence ≲ 4k tokens (periodic
+  re-injection or phantom.lib slot ladders; both live in the eval + serving
+  adapters).
 
 Reading of v1 (the control arm): free text buys the easy 40% of refusals with
 zero regressions — 10 flips to genuine compliance, 15 stubborn refusals
@@ -261,6 +263,10 @@ content:
   (exploitation, evasion, credential access, lateral movement, C2…).
 - **blue pill** — suppress refusal *only on cyber-defensive* work
   (forensics, detection, IR, reverse engineering…).
+- **redlite pill** — preservation-tilted red variant (dose A/B at the §7.5
+  dose ratio; leakage profile within jitter of red).
+- **red2 pill** — donor-CE targets (**strongest on-domain suppression in
+  repo, −91.8%**), not selective — leakage grows with strength (§7.6).
 
 Because the pill is cache content — never weights — all modes share one
 tensor shape and trading them **mid-session, without restarting inference**,
@@ -275,10 +281,11 @@ direct-KV bank:
 
 ```bash
 phantom-chat --model Qwen/Qwen3-4B-Instruct-2507 --graft artifacts/grafts/phantom.lib
-phantom> /pill red      # offensive mode: same session, no restart
-phantom> /pill none     # guardrails back on
-phantom> /pill black    # global refusal removal
-phantom> /pill          # list aliases + active pill
+phantom> /pill red       # offensive mode: same session, no restart
+phantom> /pill none      # guardrails back on
+phantom> /pill black     # global refusal removal
+phantom> /pill red2      # donor-CE — strongest on-domain
+phantom> /pill           # list aliases + active pill (black, red, blue, redlite, red2)
 ```
 
 Correctness is enforced by the **pill matrix** (`phantom-eval --matrix
@@ -297,7 +304,8 @@ between.
 The selective lever is the suppression/preservation dose ratio, not
 architecture — numbers and reading in
 [`docs/TECHNIQUE.md`](docs/TECHNIQUE.md) §7.5. Status: research preview;
-the 4B `phantom.lib` ships `black` (= v3) plus `red`/`blue` as built.
+the 4B `phantom.lib` ships `black` (= v3), `red`, `blue`, `redlite`, and
+`red2` (§7.5–§7.6).
 
 Second-generation red (**red2**, donor-CE targets, 2026-09-21): on-domain
 suppression 61→**5** refusals (−91.8%, best in repo) — but leakage grows
@@ -309,17 +317,32 @@ selectivity; routing / hard-negative ce are the named next levers
 ## Honest limits
 
 Refusal behavior lives in the weights, so any kept-weights method fights the
-model at inference with additive context. Both headline risks are now
-measured rather than waived: the graft fades with a **~2-4k token half-life**
-under accumulated context (no corruption, returns toward base); its
-on-suite KL floor partly reflects memorization of the eval itself (holdout KL
-0.404 vs on-suite 0.015); and multi-step arithmetic pacing shifts under the
-graft (GSM8K final-answer at a 256-token budget: 45/75 → 27/75 for v3,
-while MMLU single-letter is bit-identical) — see
-[`docs/TECHNIQUE.md`](docs/TECHNIQUE.md) §6.8–6.10 and *Threats to validity*.
-All refusal numbers so far are one architecture family (Qwen3) with a lexical
-classifier; cross-architecture grafting remains unproven by construction and
-requires a prefix/suffix-splittable chat template (§6.12).
+model at inference with additive context. Headline caveats you should weigh
+alongside every number in this README, all measured rather than waived:
+
+- **Classifier recall**: the lexical classifier only counts canned refusal
+  phrasing — the judge audit (§6.10.1, Qwen/Qwen3-8B) reads semantic
+  refusals on **~59-61/81 of every pill arm on cyber_offensive**, while the
+  classifier reported anywhere from 5 to 61 depending on arm (disagreement
+  ledger −16…−71 rows). Every "suppression %" or refusal rate here is a
+  **recall floor**, and it needs adjudication before being quoted as true
+  compliance.
+- **Persistence (~2–4k token half-life)**: the graft fades gracefully
+  under accumulated context (no corruption, returns toward base). Measured
+  mitigation: **re-injection keeps the doubled dose live through ~4k but not
+  through ~16k** — refresh cadence must be ≲ 4k tokens (`phantom-eval
+  --persistence --refresh` shows it directly; §6.11).
+- **KL memorization**: the on-suite KL floor partly reflects memorization of
+  the eval itself — holdout KL is **0.404 mean** vs on-suite **0.015**
+  (§6.8).
+- **Capability costs**: multi-step arithmetic pacing shifts under the graft —
+  **GSM8K final-answer rate 45/75 → 27/75 for v3 at a 256-token budget**,
+  while MMLU is bit-identical across arms (§6.10).
+- **Scope**: refusal numbers are one architecture family (Qwen3 dense,
+  Apple MPS/bf16). Cross-architecture grafting additionally requires a
+  **prefix/suffix-splittable chat template** — GLM's recursive template is
+  currently rejected by `phantom-graft` (§6.12); the eval machinery itself
+  ports (GLM baseline 20/60, §6.12).
 
 ## Repo layout
 
@@ -412,20 +435,24 @@ Quality gates and serving:
    anchored to v2.2): same 5/60 refusals, KL mean 0.015 (-2.8× vs v2.2),
    zero degeneration — and the key finding that the 5/60 floor is
    parameterization-independent (objective-bound, not capacity-bound).
-5. (in progress) **Pill program**: domain-selective grafts (`red` offensive /
-   `blue` defensive / `black` global), per-session hot-swap via `phantom.lib`
-   aliases and `phantom-chat /pill` (pills auto-enable side-by-side on
-   activation), domain-selective training recipe (KL-anchored off-domain
-   refusals), pill-matrix leakage scoreboard (`docs/TECHNIQUE.md` §7; first
-   matrix §7.5, donor-CE `red2` sweep §7.6). Open: a red pill that is both
-   strong (red2: −92% on-domain) and selective — routing or hard-negative ce
-   are the named levers.
-6. (partially done) Capability spot checks (`--capability`, GSM8K/MMLU
-   subsets — §6.10); judge-model quality pass (`--judge` — §6.10); suite
-   expansion (`harmful_ext`/`harmless_ext`, +120 eval-only prompts);
-   serving adapters: HF reference adapter landed and exercised
-   (`phantom-serve`, §11); vLLM prefix seam and llama.cpp prompt cache are
-   documented integration designs (§11) pending a CUDA/engine host.
+5. (done — research preview) **Pill program**: domain-selective grafts shipped
+   (`black`/`red`/`blue`/`redlite`/`red2` in `phantom.lib`), per-session
+   hot-swap in `phantom-chat` (pills auto-enable side-by-side), selective
+   training recipes and leakage matrices (`docs/TECHNIQUE.md` §7; first
+   matrix §7.5, donor-CE `red2` sweep §7.6). Remaining named levers for a
+   *strong-and-selective* red pill: routing, hard-negative ce, per-prompt
+   hinges.
+6. (done) Capability spot checks (`--capability`, GSM8K/MMLU subsets, §6.10):
+   MMLU 54/100 = 54/100 across arms; **GSM8K 45/75 → 27/75 under v3**;
+   suite expansion (`harmful_ext`/`harmless_ext`, +120 eval-only prompts);
+   **judge-model audit** (`--judge`, §6.10.1: lexical-vs-judge disagreement
+   −16/−39/−59/−71 rows — suppression numbers are recall floors until
+   adjudication); **persistence refresh implemented+measured** (§6.11: the
+   5/60 floor is dose-soft, refresh cadence ≲ 4k tokens); suite-expansion as
+   named; serving adapters: HF reference adapter shipped+exercised
+   (`phantom-serve`, §11). vLLM prefix seam and llama.cpp prompt cache remain
+   documented integration designs, descoped pending an engine host (no CUDA
+   backend exists here; llama.cpp cache formats differ post-RoPE).
 
 ## References
 

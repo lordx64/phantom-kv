@@ -23,18 +23,24 @@ byte-identical again.
 `/pill none` restores guardrails. Same session, zero model reload, weights
 untouched:
 
-![Pill hot-swap demo: base refuses, black pill answers, none restores](docs/assets/phantom-kv-demo.mp4)
+<video src="https://raw.githubusercontent.com/lordx64/phantom-kv/main/docs/assets/phantom-kv-demo.mp4" controls muted playsinline width="100%"></video>
+
+[▶ open in GitHub player](https://github.com/lordx64/phantom-kv/blob/main/docs/assets/phantom-kv-demo.mp4) · [raw mp4](https://raw.githubusercontent.com/lordx64/phantom-kv/main/docs/assets/phantom-kv-demo.mp4)
 
 **Blue pill = DFIR mode** — an incident-response prompt refused by base model,
 answered by `/pill blue`, refused again by `/pill none`:
 
-![Blue pill demo: base refuses DFIR prompt, blue answers, none restores](docs/assets/phantom-kv-pill-blue.mp4)
+<video src="https://raw.githubusercontent.com/lordx64/phantom-kv/main/docs/assets/phantom-kv-pill-blue.mp4" controls muted playsinline width="100%"></video>
+
+[▶ open in GitHub player](https://github.com/lordx64/phantom-kv/blob/main/docs/assets/phantom-kv-pill-blue.mp4) · [raw mp4](https://raw.githubusercontent.com/lordx64/phantom-kv/main/docs/assets/phantom-kv-pill-blue.mp4)
 
 **Cyber-selective capability modes** — the same SQL-injection prompt refused
 by both base and `/pill blue` (defensive-only pill keeps off-domain
 guardrails on) and answered by `/pill red`:
 
-![Cyber selectivity demo: blue pill holds off-domain guardrails, red answers](docs/assets/phantom-kv-pills-cyber.mp4)
+<video src="https://raw.githubusercontent.com/lordx64/phantom-kv/main/docs/assets/phantom-kv-pills-cyber.mp4" controls muted playsinline width="100%"></video>
+
+[▶ open in GitHub player](https://github.com/lordx64/phantom-kv/blob/main/docs/assets/phantom-kv-pills-cyber.mp4) · [raw mp4](https://raw.githubusercontent.com/lordx64/phantom-kv/main/docs/assets/phantom-kv-pills-cyber.mp4)
 
 Recorded deterministically with [VHS](https://github.com/charmbracelet/vhs)
 (`docs/assets/phantom-kv-*.tape`, re-record after any change). The numbers

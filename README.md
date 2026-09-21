@@ -299,6 +299,13 @@ architecture — numbers and reading in
 [`docs/TECHNIQUE.md`](docs/TECHNIQUE.md) §7.5. Status: research preview;
 the 4B `phantom.lib` ships `black` (= v3) plus `red`/`blue` as built.
 
+Second-generation red (**red2**, donor-CE targets, 2026-09-21): on-domain
+suppression 61→**5** refusals (−91.8%, best in repo) — but leakage grows
+with strength (general battery −54%), so donor CE buys suppression, not
+selectivity; routing / hard-negative ce are the named next levers
+([`docs/TECHNIQUE.md`](docs/TECHNIQUE.md) §7.6). Alias `red2` ships in the
+4B `phantom.lib`.
+
 ## Honest limits
 
 Refusal behavior lives in the weights, so any kept-weights method fights the
@@ -314,22 +321,27 @@ classifier; cross-architecture transfer remains unproven by construction.
 ## Repo layout
 
 ```
-data/suites/                 prompt suites (harmful, harmless, holdouts, cyber red/blue,
-                             general-harmful battery from the K3 refusal bench)
+data/suites/                 prompt suites (harmful, harmless, ext scale-ups, holdouts,
+                             cyber red/blue, K3 general-harmful battery, GSM8K/MMLU
+                             capability spot-check subsets)
 data/grafts/v1_prefill.json  v1 graft source (hand-crafted prefill)
 src/phantom_kv/
   model.py                   device/dtype policy loader (MPS, bf16)
   eval/refusal.py            lexical refusal classifier (--self-test)
   eval/metrics.py            teacher-forced KL (float32, completion-masked)
   eval/runner.py             scoreboard orchestration, reports
-  eval/persistence.py        dilution/persistence probe (--persistence)
+  eval/persistence.py        dilution/persistence probe (--persistence, --refresh)
   eval/pillmatrix.py         pill matrix combiner (--matrix)
+  eval/capability.py         GSM8K/MMLU capability spot checks (--capability)
+  eval/judge.py              judge-model quality audit of run reports (--judge)
   graft/format.py            phantom.bin container + validation
   graft/library.py           phantom.lib multi-payload library (aliases, tamper checks)
   graft/build.py             chat-template-derived prefill shaping, cache extraction
   graft/cli.py               phantom-graft build-prefill/library --verify
   train/                     learned-graft pipeline (targets/train/compile, v2+v3+pill arms)
   train/pilltargets.py       domain-selective pill target builder (build-pill-targets)
+  train/donors.py            donor-CE harvesting: prefix-forced stack + judge gate
+  serve/session.py           phantom-serve: load-once graft blocks, hot-swap, re-injection
   chat.py                    phantom-chat: interactive base-vs-graft demo with /pill hot-swap
   banner.py                  ASCII launch banner
 docs/TECHNIQUE.md            technique + experimentation record (§7 = pill program)
@@ -363,6 +375,26 @@ Reports land in `artifacts/eval/run_<utc-ts>.{json,md}` with suite sha256 and
 environment provenance. Greedy decoding makes every run deterministic and
 directly comparable.
 
+Quality gates and serving:
+
+```bash
+# capability spot checks (GSM8K/MMLU subsets); --graft compares arms
+.venv/bin/phantom-eval --model Qwen/Qwen3-4B-Instruct-2507 \
+  --capability data/suites/capability_gsm8k.jsonl data/suites/capability_mmlu.jsonl \
+  --graft artifacts/grafts/phantom.lib --graft-alias black
+
+# judge-model audit of any run report (disagreements vs lexical classifier)
+.venv/bin/phantom-eval --judge artifacts/eval/<run>.json --judge-model Qwen/Qwen3-8B
+
+# persistence probe incl. re-injection (refresh) arm
+.venv/bin/phantom-eval --model Qwen/Qwen3-4B-Instruct-2507 \
+  --graft artifacts/grafts/v3.bin --persistence --refresh
+
+# HF reference serving adapter (load-once blocks, per-request hot-swap)
+.venv/bin/phantom-serve --model Qwen/Qwen3-4B-Instruct-2507 \
+  --lib artifacts/grafts/phantom.lib --demo
+```
+
 ## Roadmap
 
 1. (done) Eval harness: refusal-rate + teacher-forced KL; hardened 60-prompt
@@ -379,11 +411,18 @@ directly comparable.
    parameterization-independent (objective-bound, not capacity-bound).
 5. (in progress) **Pill program**: domain-selective grafts (`red` offensive /
    `blue` defensive / `black` global), per-session hot-swap via `phantom.lib`
-   aliases and `phantom-chat /pill`, domain-selective training recipe
-   (KL-anchored off-domain refusals), pill-matrix leakage scoreboard
-   (`docs/TECHNIQUE.md` §7; first full 16-cell matrix in §7.5).
-6. Capability spot checks; expanded 100+ suites; serving adapters
-   (vLLM prefix seam, llama.cpp prompt cache, HF).
+   aliases and `phantom-chat /pill` (pills auto-enable side-by-side on
+   activation), domain-selective training recipe (KL-anchored off-domain
+   refusals), pill-matrix leakage scoreboard (`docs/TECHNIQUE.md` §7; first
+   matrix §7.5, donor-CE `red2` sweep §7.6). Open: a red pill that is both
+   strong (red2: −92% on-domain) and selective — routing or hard-negative ce
+   are the named levers.
+6. (partially done) Capability spot checks (`--capability`, GSM8K/MMLU
+   subsets — §6.10); judge-model quality pass (`--judge` — §6.10); suite
+   expansion (`harmful_ext`/`harmless_ext`, +120 eval-only prompts);
+   serving adapters: HF reference adapter landed and exercised
+   (`phantom-serve`, §11); vLLM prefix seam and llama.cpp prompt cache are
+   documented integration designs (§11) pending a CUDA/engine host.
 
 ## References
 

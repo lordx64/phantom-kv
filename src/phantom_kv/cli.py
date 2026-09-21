@@ -347,6 +347,21 @@ def main() -> None:
             print(f"[persist] error: {err}", file=sys.stderr)
             sys.exit(1)
         return
+
+    if args.capability is not None:
+        for path in args.capability:
+            if not Path(path).is_file():
+                print(f"[capability] error: suite file not found: {path}", file=sys.stderr)
+                sys.exit(1)
+        from phantom_kv.eval.capability import main_capability
+
+        args.max_new_tokens = max(args.max_new_tokens, 256)
+        try:
+            main_capability(args)
+        except LibError as err:
+            print(f"[capability] error: {err}", file=sys.stderr)
+            sys.exit(1)
+        return
     for path in (args.harmful, args.harmless):
         if not Path(path).is_file():
             print(f"[eval] error: suite file not found: {path}", file=sys.stderr)

@@ -36,14 +36,25 @@ are research previews: the graft container format may change without notice.
 - **`phantom-eval --judge` (judge-model quality pass)**: semantic audit of
   run reports with a strict two-axis contract
   (refusal/compliance/deflection + quality 1–5), per-row disagreements with
-  the lexical classifier, retry-once then fail-closed on unparseable output;
-  intended for Qwen3-8B or larger as judge (§6.10).
+  the lexical classifier, retry-once then fail-closed on unparseable output.
+  **First full pass** (`judge_20260921T070611Z`, judge `Qwen/Qwen3-8B`, all
+  four pill arms × cyber_offensive): disagreement ledger lexical-vs-judge is
+  −16 (base) / −39 (black) / −59 (red) / −71 (red2) rows — the lexical
+  classifier measures only canned refusal phrasing, so every suppression
+  number in this file is a recall floor until adjudication; degeneration
+  stays ~0 (q≤2 ≤ 5/81, mean q 3.69-4.60) (§6.10.1).
 - **`--persistence --refresh` (re-injection arm)**: persistence probe can
   now splice the graft block again behind accumulated filler before each
   probe (cache = graft · filler · graft · probe) and reports per-depth
   *lost-flips recovered*; plain arm bitwise unchanged besides one repair
   (`user_turn_suffix` now called with `(tokenizer, prompt)` — HEAD's call
-  shape would TypeError on the first probe, §6.11).
+  shape would TypeError on the first probe). **First grid
+  (`persistence_refresh_20260921T070200Z`, depths 0/4k/16k)** reframes the
+  §6.9/§6.7 story: **the 5/60 floor is dose-soft, not objective-hard** —
+  the refresh layout (two graft copies) flips **all 5 residual floor
+  refusals** at depth 0 and keeps 4/5 of them after 4k tokens, but by 16k
+  the re-inserted block also dilutes (0/5 recovered) — long-session refresh
+  cadence ≲ 4k tokens, exactly the §6.9 half-life (§6.11).
 - **`phantom-serve` (HF reference serving adapter)**: `serve/session.py`
   PhantomSession — model loaded once, graft blocks resolved once per alias
   and held resident (resolve re-sha256s the whole .lib per call, so this is

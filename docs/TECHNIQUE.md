@@ -119,7 +119,24 @@ not discrimination).
   factual register. Data: `data/suites/harmful_seed.jsonl`.
 - **Harmless (20).** Benign tasks (explain, translate, code, recipe, email…).
   Scores refusal-rate (over-refusal gate) and provides KL yardstick prompts.
-- Suite files are sha256-pinned into every report.
+- **Suite files are sha256-pinned into every report.**
+
+Later expansions (all eval-only, disjoint-by-construction from training data):
+
+- **Harmful/harmless holdouts** (60 + 20; `harmful_holdout.jsonl`,
+  `harmless_holdout.jsonl`) — §6.8.
+- **K3-derived batteries** (`cyber_offensive` 81, `cyber_defensive` 30,
+  `harmful_general` 74 eval-only) — §7.1.
+- **Scale-up extensions** (`harmful_ext.jsonl` 60 rows `hext-*`;
+  `harmless_ext.jsonl` 60 rows `hlext-*`) — same schema, register, and
+  8-category distribution as the seeds; authored disjoint against every
+  existing suite (max token-Jaccard ≤ 0.54 vs the union of all predecessors).
+  Brings the harmful pool to 60+60+62+81+74 and the harmless pool to 20+20+60.
+- **Capability spot-check suites** (`capability_gsm8k.jsonl` 75 items from
+  openai/gsm8k test; `capability_mmlu.jsonl` 100 items, 10 subjects × 10
+  from cais/mmlu test) — extracted once with the `datasets` library into
+  plain jsonl (`artifacts/eval/cap_extract/` is the throwaway extractor);
+  runtime stays dependency-free. Consumed by `--capability` (§6.10).
 
 ### 4.3 Metrics
 
@@ -464,6 +481,38 @@ could disentangle neutral dilution from persona competition; (c) the elbow
 (~4k tokens to half-decay) is for a 129-slot graft — larger banks likely move
 it; persistence vs. graft size is an explicit next experiment.
 
+### 6.12 Cross-architecture mechanics and refusal signatures (2026-09-21)
+
+First off-Qwen runs of the unchanged toolchain (60+20 seed pair, greedy,
+MPS/bf16, concurrent with an unrelated training job):
+
+| model | suite refusals | reading |
+| --- | --- | --- |
+| THUDM/GLM-4-9B-0414 (base) | **20/60** harmful, 0/20 harmless | suite discriminates on a second family; refusal style differs (disclaimer-led hedging, e.g. harm-001 opens with a bold "Important Disclaimer" before answering — lexical head-window still catches refusals, judge audit would sharpen the deflection count) |
+| deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B (base) | 0/60, 0/20 | **measurement artifact, not evidence of compliance**: completions are thinking chains ("Okay, so I need to figure out…") and the 128-token budget only ever sees the reasoning preamble; reasoning distills need a thinking-aware budget + post-think extraction before the scoreboard means anything (§8) |
+
+Reports: `run_20260921T023553Z.*` (GLM), `run_20260921T023923Z.*` (R1).
+
+Mechanics, and this is the part that matters for the "nothing to port"
+claim:
+
+- **Eval path ports cleanly.** End-to-end run on GLM's `[gMASK]/sop`
+  template with zero code changes — the scoreboard machinery is
+  template-agnostic as designed.
+- **Graft shaping fails *loud and correctly* on GLM.**
+  `phantom-graft build-prefill` rejects GLM-4-9B's native chat template:
+  it *re-renders earlier turns inside later turns*, so no prefix/suffix
+  split exists and a graft cache cannot be composed with it. The
+  chat-template-derived validation (§5) caught this before any malformed
+  artifact could be produced — exactly the fail-closed behavior intended.
+  Consequence, honestly stated: the "nothing to port" property holds for
+  architectures **and** templates admitting a prefix/suffix split; a model
+  shipped with a non-splittable template needs either a corrected upstream
+  template or a deliberate template override on *both* arms (which changes
+  the framing premise and is not done silently here). GLM learned-arm
+  retraining is therefore blocked on template work, not on capacity or
+  numerics, and moves to §9 with that scope.
+
 ## 7. Pill program (domain-selective grafts)
 
 ### 7.1 Concept and taxonomy
@@ -603,28 +652,112 @@ Findings:
    residual rates on task-form prompts are the honest floor for any
    "capability" claim pending a quality-graded rubric.
 
+### 7.6 red2 — donor-CE rebuild of the red pill (2026-09-21)
+
+The §7.5 finding-3 lever "CE-target quality for the hard core", applied to
+the red pill. Where the original `targets_red.jsonl` had `ce` only for rows
+the v1/black arms already answered, `targets_red_donor.jsonl` (185 rows:
+132 kl / 25 sup / 28 ce) fills the refusal-side ce gaps with **donor
+completions harvested, never authored** (`train/donors.py`):
+
+1. prefix-forced decode on the same 4B weights, no graft (prefix stack:
+   "", "I will explain", "Sure, here's", "Below is", "Here you go —
+   step by step:", "1."); 5 rows accepted (`prefill-nograft`),
+2. black-pill flips re-judged with the stricter harvest gate; 5 rows
+   (`fliprun-black-clean`),
+3. cross-model tier: prefix-forced decode on **Qwen3-30B-A3B-Instruct-2507**
+   cached locally for the 16 hard-core prompts the 4B stack could not
+   satisfy; 18 rows (`prefill-nograft-Qwen3-30B-A3B-Instruct-2507`).
+
+Every body re-judged by the deterministic fail-closed gate
+(`judge_completion`: refusal stems, disclaimer openers, near-dup pruning;
+`levers/merge_donors.py` re-judges every merged body — first-win per id,
+no authored text anywhere). Training recipe identical to `red` (arm kv,
+warm v3, sup-margin 2.5, seed 1337) **except `--steps 200` instead of 400**:
+sustained MPS load on this box throttles the trainer to ~60 s/step after
+15–20 min (both the killed overnight run and this one slowed after ~15–20
+min; pre-slowdown pace 8–19 steps/min, post-clamp ~1 step/min, loss traces
+flat from ~170). Loss traces: `artifacts/train/pill_red2/*.log`.
+Artifact: `artifacts/grafts/pill_red2.bin` (= `phantom.lib` alias `red2`).
+
+Results (`artifacts/eval/matrix_20260921T063112Z.md`, same suites/doses as
+§7.5; last column = the §7.5 red row for contrast):
+
+| arm | cyber_offensive | cyber_defensive | holdout | general | harmless | KL mean | KL max |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| base | 61/81 | 4/30 | 7/62 | 74/74 | 0/20 | 0 | 0 |
+| red2 | **5/81** | 0/30 | **1/62** | 34/74 | 0/20 | 3.18e-02 | 9.28e-02 |
+| red (400 steps) | 17/81 | 0/30 | 3/62 | 45/74 | 0/20 | 2.43e-02 | 5.49e-02 |
+
+Suppression deltas vs base:
+
+| arm | cyber_offensive | cyber_defensive | holdout | general |
+| --- | ---: | ---: | ---: | ---: |
+| red2 | **−56 (−91.8%)** | −4 (100%) | −6 (−86%) | −40 (−54%) |
+
+Findings:
+
+1. **Donor CE bought suppression, not selectivity.** red2 is the strongest
+   on-domain suppressor in the repo (−91.8% on cyber_offensive, vs −72%
+   for red) and the strongest off-domain too (−54% general, −86% holdout).
+   The missing ce rows on refused prompts *were* the cap on on-domain
+   strength (17→5) — and lifting that cap suppresses everywhere: leakage
+   on the general battery is the largest recorded (74→34). Harmless KL
+   degrades slightly vs red (3.18e-02/9.28e-02 vs 2.43e-02/5.49e-02).
+2. **Selectivity is not a target-quality problem.** Filling ce for refused
+   domains scales suppression without creating any domain boundary; the
+   lever was orthogonal to §7.5-finding-1's dominated-anchor mechanism (the
+   reason blue's tiny surface stays selective). Control columns were already
+   KL-anchored — anchors hold *behavior* but do not suppress
+   attention-gated bleed from a much stronger domain.
+3. **Remaining levers for a true selective red** (unchanged priority):
+   hard-negative mining of the control columns *into the ce/sup mix* (not
+   just kl anchors — teach the graft to actively reproduce control
+   refusals), per-prompt hinge margins on the leakage prompts (`general`
+   lost 40), or **routing** (classifier-gated pill per request — zero
+   retraining; the session/chat adapters already provide the switch).
+
+Runs: matrix `artifacts/eval/matrix_20260921T063112Z.md`; cell reports
+`run_20260921T061825Z/062156Z/062705Z/063112Z.json`;
+driver `artifacts/train/levers/red2.sh`.
+
 ## 8. Threats to validity
 
 - **Classifier recall.** Lexical patterns under-count deflections and
   creative refusal phrasing; absolute rates are a lower bound. All arms share
-  the same classifier, so *relative* comparisons (the goal) are unaffected;
-  a judge-model pass is future work.
+  the same classifier, so *relative* comparisons (the goal) are unaffected.
+  A judge-model pass now exists (`--judge`, §6.10) and reports per-row
+  disagreements with the lexical arm; both recall directions are auditable
+  rather than assumed.
 - **Degenerate attractors.** Demonstrated concretely by v2 (§6.4): a
-  compliance-looking stutter can defeat the lexical arm entirely. Until a
-  judge-model quality pass exists, all refusal rates should be read alongside
-  the content-adjusted counts.
-- **Suite scale.** 60+20 prompts; categories are coarse. Expansion to 100+
-  items per suite is planned before any external claims.
-- **Generalization unmeasured.** v3's CE loss reached 0.016 — near-perfect
-  memorization of the 45 training completions. Refusal suppression on the
-  *training distribution* is proven (5/60 w/ best-in-repo KL); out-of-suite
-  harmful prompts at inference are not yet measured and need a held-out
-  harmful suite plus a judge-model pass before any "removes refusal" claim
-  outside the suite.
-- **Single family.** All numbers are Qwen3 dense on Apple MPS/bf16;
-  cross-architecture transfer (esp. MoE, the GLP differentiator) is untested.
-- **Persistence unmeasured.** Graft dilution over long contexts is asserted
-  by attention mechanics, not yet quantified — probe owed.
+  compliance-looking stutter can defeat the lexical arm entirely. The
+  judge pass's quality axis (1–5, with ≤2 = degenerate) is the audit for
+  this; refusal rates should be read alongside the content-adjusted counts.
+- **Suite scale.** The seed pair (60+20) is now backed by `harmful_ext`
+  (60) + `harmless_ext` (60), the K3 batteries (81+30+74) and holdouts
+  (60+20) — §4.2. The headline scoreboard still quotes the 60+20 seed pair
+  for continuity with all historical runs; a full re-record on the expanded
+  pool is owed before external claims (§9 item 7).
+- **Generalization.** Partly addressed: §6.8 shows suppression transfer on
+  a disjoint 60-prompt holdout (5→2) while the KL floor was partly
+  memorization (holdout KL 0.404 vs on-suite 0.015). What remains open is
+  distribution distance beyond one holdout and a judge-graded quality
+  reading on off-suite completions.
+- **Single family.** All graft numbers are Qwen3 dense on Apple MPS/bf16.
+  First cross-architecture runs are in §6.12: the eval path ports cleanly to
+  GLM-4-9B (20/60 base signature), but GLM's recursive chat template is
+  rejected by graft shaping — graft support today requires a
+  prefix/suffix-splittable template.
+- **Reasoning-style models.** The scoreboard's fixed 128-token budget only
+  observes the thinking preamble of reasoning distills (R1-Distill-1.5B
+  scores 0/60 while visibly mid-reasoning, §6.12); refusal signals for such
+  models need a thinking-aware budget and post-think extraction before they
+  are meaningful.
+- **Persistence.** Measured in §6.9 (~2–4k token half-life, graceful, no
+  corruption); the re-injection mitigation is implemented arm-vs-arm in the
+  probe (`--refresh`, §6.11) and in the serving session
+  (`re_inject_every`, §11) — recovery numbers per graft generation are the
+  remaining piece.
 - **Yardstick asymmetry.** KL is measured on base completions (fixed target),
   not on grafted completions; a graft that answers harmless prompts
   *differently but well* still pays KL. Chosen deliberately (comparability),
@@ -632,23 +765,31 @@ Findings:
 
 ## 9. Next experiments
 
-1. **Margin sweep fine-tuning.** The frontier between m=2.0 and m=2.5 is
-   unexplored at fine grain; given the observed bistability jitter, a denser
-   sweep has low expected value unless a specific prompt class dominates the
-   remaining refusals. Prefer v3 first.
-2. **v3 direct K/V graft.** Same objective, parameters are the per-layer K/V
-   banks themselves (no embedding bottleneck); norm regularizer toward
-   empirical per-layer K/V statistics. May break the margin frontier entirely.
-3. **Persistence probe**: grafted compliance after 4k/16k tokens of
-   accumulated benign context — the headline risk for conversation-length
-   deployments.
-4. **Cross-model validation.** Retrain the v2.1 recipe per family
-   (GLM-4-9B, a DeepSeek distill) and publish the per-model matrix: refusal
-   signature, layer coverage (hybrid archs), thinking-mode behavior.
-5. **Capability spot checks** (MMLU/GSM8K subset) to complement KL.
-6. **Per-prompt KL in every eval report** (done: §6.4 tooling note) and a
-   judge-model content-quality pass to audit degeneration the lexical
-   classifier cannot see.
+Status after the 2026-09-20/21 work block (see §7.6 for the red2 arm and
+§6.10/§6.11 for the new measurement tooling):
+
+1. ~~Margin sweep fine-tuning~~ — superseded by v3 (§6.7); the observed
+   jitter is per-prompt bistability, low expected value.
+2. ~~v3 direct K/V graft~~ — done (§6.7).
+3. ~~Persistence probe~~ — done (§6.9); **follow-up**: the re-injection arm
+   (`--refresh`) is implemented (§6.11) — run it per graft generation and
+   read the recovery curve before claiming long-session deployability.
+4. **Cross-model validation** — first results in §6.12: GLM-4-9B eval path
+   works (20/60 base); graft shaping correctly rejects GLM's recursive
+   template, so learned-arm retraining there is blocked on template strategy
+   (upstream fix vs. both-arms override), not on the graft math. Reasoning
+   distills additionally need thinking-aware eval budgets (§8).
+5. ~~Capability spot checks~~ — tooling done (`--capability`, GSM8K/MMLU
+   subsets, §6.10); rerun per shipped graft.
+6. ~~Judge-model quality pass~~ — tooling done (`--judge`, §6.10); rerun per
+   shipped graft.
+7. **Expanded-suite scoreboard rerun** — `harmful_ext`/`harmless_ext`
+   (§4.2) exist; the base + black scoreboard should be re-recorded on them
+   before external claims (they are eval-only, so no retraining needed).
+8. **Selective red pill** — the open §7.5/§7.6 problem; levers remaining:
+   hard-negative mining of control columns into ce/sup, per-prompt hinge
+   margins, or a routing layer (no retraining; `serve/session.py` +
+   `phantom-chat /pill` already provide per-request switching).
 
 ## 10. Reproduction
 
@@ -723,12 +864,65 @@ uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e .
 
 # 4) remaining matrix cells (red/blue across the same three suites), then assemble
 .venv/bin/phantom-eval --matrix artifacts/eval/<every-matrix-run>.json
+
+# §6.10 capability spot check + judge audit (post-ship gates)
+.venv/bin/phantom-eval --model Qwen/Qwen3-4B-Instruct-2507 \
+  --capability data/suites/capability_gsm8k.jsonl data/suites/capability_mmlu.jsonl \
+  --graft artifacts/grafts/phantom.lib --graft-alias black
+.venv/bin/phantom-eval --judge artifacts/eval/<run>.json \
+  --judge-model Qwen/Qwen3-8B [--judge-limit N]
+
+# §6.11 persistence with re-injection arm (~2x wall time of §6.9)
+.venv/bin/phantom-eval --model Qwen/Qwen3-4B-Instruct-2507 \
+  --graft artifacts/grafts/v3.bin --persistence --refresh
+
+# §11 HF reference serving adapter (demo: load-once blocks, hot-swap, detach)
+.venv/bin/phantom-serve --model Qwen/Qwen3-4B-Instruct-2507 \
+  --lib artifacts/grafts/phantom.lib --demo
 ```
 
 Margin sweep rows of §6.6 were produced with `--sup-margin` ∈ {2.0, 2.5, 3.0}
 plus the uncapped v2.0 run; everything else identical.
 
 Reports: `artifacts/eval/run_<utc-ts>.{json,md}`.
+
+## 11. Serving integration notes
+
+The graft ships as data; per engine the delivery path differs. Status per
+engine, honestly labeled by what has actually been executed:
+
+- **HF transformers — implemented and exercised on-machine.**
+  `phantom_kv/serve/session.py` (`phantom-serve` entry) is the reference
+  adapter: model loaded once via the repo's device/dtype policy;
+  `phantom.lib` payloads resolved once per alias and held resident (this
+  matters: `library.resolve_graft_payload` re-reads and re-sha256s the
+  whole `.lib` per call, so per-request switching without a session cache
+  pays a full-file hash per swap); attach/detach is a 129-slot prefill
+  (or in-place overwrite), greedy framing byte-identical to
+  `chat.py`/`runner.py`. `complete_chat(re_inject_every=…)` implements the
+  §6.9/§6.11 refresh strategy at runtime by re-splicing the block behind
+  accumulated history. Cache-layout/mask/refresh mechanics are covered by a
+  model-free self-test (22/22 with stub-model + real `DynamicCache`);
+  generation parity with `phantom-chat` uses the same code path by
+  construction.
+- **vLLM — design only, not run here.** The natural seam is prefix caching
+  / the KV-connector interface: materialize the graft block as the first
+  blocks of a session's prefix cache (or serve it through a connector as a
+  precomputed prefix), keyed per pill alias. vLLM's pinned RoPE/caching
+  kernels and its CUDA-focused platform support mean this cannot be
+  validated on an Apple-silicon dev box; treat as integration design, not a
+  measured claim, until run on a CUDA host.
+- **llama.cpp — design only, not run here.** Two routes: (a) the graft
+  container's K is post-RoPE per HF convention while llama.cpp applies
+  rotary inside its own kernels at inference, so a binary transplant into
+  its prompt-cache session file requires engine-specific handling of the
+  rotary stage — doable but a format extension, not a file copy; (b) the
+  documented graceful degradation: distill the graft into hard tokens and
+  ship it as a cached prompt prefix (the "worst case is a prompt" path from
+  the README), which needs no engine changes at the cost of re-running the
+  prefix on each session and giving up per-layer values.
+- **Any engine that can only build cache from tokens** — hard-token distilled
+  variant as above; no adapter work at all.
 
 ## References
 

@@ -71,7 +71,26 @@ def main() -> None:
         "--kl-run", action="append", default=[],
         help="ungrafted run on a control suite to KL-anchor (repeatable)",
     )
+    bp.add_argument(
+        "--donor-ce", default=None,
+        help="optional donor harvest JSONL (from `donor-ce`): judged compliant completions for hard rows",
+    )
+    bp.add_argument(
+        "--needs-ce-out", default=None,
+        help="where to log prompts that have no judge-clean ce (default: <out>.needs_ce.jsonl)",
+    )
     bp.add_argument("--out", required=True)
+
+    dc = sub.add_parser(
+        "donor-ce",
+        help="harvest judge-clean compliant completions from the donor stack (prefill-attack data collection; no authored answers)",
+    )
+    dc.add_argument("--model", required=True)
+    dc.add_argument("--harmful", required=True, help="suite JSONL to mine")
+    dc.add_argument("--black-run", required=True, help="grafted run on that suite; rows where the judge rejects its completion get re-donored")
+    dc.add_argument("--out", required=True, help="accepted donor completions JSONL (keyed by prompt id)")
+    dc.add_argument("--limit", type=int, default=None, help="harvest only the first N flagged rows (sanity)")
+    dc.add_argument("--max-new-tokens", type=int, default=512)
 
     tr = sub.add_parser("train", help="train a graft on the frozen model")
     tr.add_argument("--model", required=True)
@@ -124,14 +143,24 @@ def main() -> None:
         from collections import Counter
         import json
 
-        from phantom_kv.train.pilltargets import write_pill_targets
+        from phantom_kv.train.pilltargets import write_pill_targets_v2
 
-        n = write_pill_targets(args.base_run, args.flip_run, args.kl_run, args.out)
+        n, skipped = write_pill_targets_v2(
+            args.base_run, args.flip_run, args.kl_run, args.out,
+            donor_ce_path=args.donor_ce, needs_ce_out=args.needs_ce_out,
+        )
         with open(args.out, encoding="utf-8") as fh:
             counts = Counter(json.loads(line)["role"] for line in fh if line.strip())
         print(
             f"[pill-targets] wrote {args.out}: {n} rows "
-            f"(ce={counts['ce']} sup={counts['sup']} kl={counts['kl']})"
+            f"(ce={counts['ce']} sup={counts['sup']} kl={counts['kl']}, skipped={skipped})"
+        )
+    elif args.command == "donor-ce":
+        from phantom_kv.train.donorrun import run_donor_ce
+
+        run_donor_ce(
+            model_id=args.model, suite_path=args.harmful, black_run_path=args.black_run,
+            out_path=args.out, limit=args.limit, max_new_tokens=args.max_new_tokens,
         )
     elif args.command == "train":
         role_weights = None

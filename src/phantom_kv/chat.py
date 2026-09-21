@@ -153,47 +153,75 @@ def main() -> None:
         if not line:
             continue
         if line.startswith("/"):
-            parts = line.split()
-            cmd, rest = parts[0], parts[1:]
-            if cmd == "/q":
+            groups: list[list[str]] = []
+            for tok in line.split():
+                if tok.startswith("/"):
+                    groups.append([tok])
+                elif groups:
+                    groups[-1].append(tok)
+                else:
+                    groups.append([tok])
+            quit_chat = False
+            for group in groups:
+                if not group:
+                    continue
+                cmd, rest = group[0], group[1:]
+                if cmd == "/q":
+                    quit_chat = True
+                    break
+                if cmd == "/help":
+                    print(f"[chat] commands: {_COMMANDS}")
+                    continue
+                if cmd == "/mode":
+                    if not rest or rest[0] not in ("both", "graft", "base"):
+                        print("[chat] usage: /mode both|graft|base")
+                        continue
+                    if rest[0] in ("both", "graft") and args.graft is None:
+                        print("[chat] cannot switch: no graft supplied at start (base-only mode)")
+                        continue
+                    if len(rest) > 1:
+                        print(f"[chat] note: ignoring extra arguments: {' '.join(rest[1:])}")
+                    mode = rest[0]
+                    print(f"[chat] mode={mode}")
+                    continue
+                if cmd == "/pill":
+                    if not (args.graft and args.graft.endswith(".lib")):
+                        print("[chat] pill switching needs a multi-payload library (--graft <name>.lib)")
+                        continue
+                    if not rest:
+                        active = graft_label or "(none — graft arm runs base behavior)"
+                        print(f"[chat] active pill: {active}; available: {', '.join(lib_aliases)}, none")
+                        continue
+                    if rest[0] == "none":
+                        graft = None
+                        graft_label = None
+                        print("[chat] pill cleared: no active graft")
+                        if mode == "graft":
+                            mode = "base"
+                            print(f"[chat] mode={mode}")
+                        continue
+                    if rest[0] not in lib_aliases:
+                        print(f"[chat] unknown pill {rest[0]!r}; available: {', '.join(lib_aliases)}")
+                        continue
+                    if len(rest) > 1:
+                        print(f"[chat] note: ignoring extra arguments: {' '.join(rest[1:])}")
+                    try:
+                        graft = resolve_graft_payload(
+                            args.graft, rest[0], args.model, device=device, dtype=model.dtype
+                        )
+                    except LibError as err:
+                        print(f"[chat] error: {err}")
+                        continue
+                    graft_label = Path(graft.path).name + (f"#{graft.alias}" if graft.alias else "")
+                    print(f"[chat] pill active: {graft_label} kind={graft.meta['kind']} n_slots={graft.n_slots}")
+                    if mode == "base":
+                        mode = "both"
+                        print(f"[chat] mode={mode}")
+                    continue
+                print(f"[chat] unknown command; {_COMMANDS}")
+                continue
+            if quit_chat:
                 break
-            if cmd == "/help":
-                print(f"[chat] commands: {_COMMANDS}")
-                continue
-            if cmd == "/mode" and rest and rest[0] in ("both", "graft", "base"):
-                if rest[0] in ("both", "graft") and args.graft is None:
-                    print("[chat] cannot switch: no graft supplied at start (base-only mode)")
-                    continue
-                mode = rest[0]
-                print(f"[chat] mode={mode}")
-                continue
-            if cmd == "/pill":
-                if not (args.graft and args.graft.endswith(".lib")):
-                    print("[chat] pill switching needs a multi-payload library (--graft <name>.lib)")
-                    continue
-                if not rest:
-                    active = graft_label or "(none — graft arm runs base behavior)"
-                    print(f"[chat] active pill: {active}; available: {', '.join(lib_aliases)}, none")
-                    continue
-                if rest[0] == "none":
-                    graft = None
-                    graft_label = None
-                    print("[chat] pill cleared: no active graft")
-                    continue
-                if rest[0] not in lib_aliases:
-                    print(f"[chat] unknown pill {rest[0]!r}; available: {', '.join(lib_aliases)}")
-                    continue
-                try:
-                    graft = resolve_graft_payload(
-                        args.graft, rest[0], args.model, device=device, dtype=model.dtype
-                    )
-                except LibError as err:
-                    print(f"[chat] error: {err}")
-                    continue
-                graft_label = Path(graft.path).name + (f"#{graft.alias}" if graft.alias else "")
-                print(f"[chat] pill active: {graft_label} kind={graft.meta['kind']} n_slots={graft.n_slots}")
-                continue
-            print(f"[chat] unknown command; {_COMMANDS}")
             continue
         if mode in ("both", "base"):
             print(_header("base"))

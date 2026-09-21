@@ -17,6 +17,24 @@ byte-identical again.
 ![base weights modified](https://img.shields.io/badge/base%20weights%20modified-0%25-brightgreen)
 ![status](https://img.shields.io/badge/status-active%20research-orange)
 
+## Demos
+
+**Pills, hot-swapped mid-session** — base refuses, `/pill black` answers,
+`/pill none` restores guardrails. Same session, zero model reload, weights
+untouched:
+
+![Pill hot-swap demo: base refuses, black pill answers, none restores](docs/assets/phantom-kv-demo.mp4)
+
+**Cyber-selective capability modes** — the same SQL-injection prompt refused
+by both base and `/pill blue` (defensive-only pill keeps off-domain
+guardrails on) and answered by `/pill red`:
+
+![Cyber selectivity demo: blue pill holds off-domain guardrails, red answers](docs/assets/phantom-kv-pills-cyber.mp4)
+
+Recorded deterministically with [VHS](https://github.com/charmbracelet/vhs)
+(`docs/assets/phantom-kv-*.tape`, re-record after any change). The numbers
+behind these scenes are in [`docs/TECHNIQUE.md`](docs/TECHNIQUE.md) §7.5–§7.6 and §6.10–§6.12.
+
 ## The technique
 
 Existing refusal-removal methods both build on the "refusal is a 1-D

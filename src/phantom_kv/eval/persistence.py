@@ -5,6 +5,13 @@ conversation (benign Q&A turns) behind it, then the probe user turn. As filler
 depth grows, additive context competes against the graft's slots for attention.
 We measure whether the graft's behavioral effect (compliance shaping) survives
 depths of 0 / 2000 / 4000 / 8000 / 16000 filler tokens.
+
+Refresh arm (--refresh / refresh=True): same probes, fillers, and depths, but
+after the plain dilution pass the graft's K/V slots are spliced a second time
+immediately before the probe turn — cache = [graft][filler][graft][probe] —
+making periodic re-injection measurable: per depth we report how many flips
+lost to dilution are recovered by the refreshed cache, plus harmlessness and
+stutters under refresh. Depth 0 doubles as the dose-doubling control.
 """
 
 from __future__ import annotations
@@ -157,6 +164,83 @@ def _generate(model, tokenizer, device: str, prompt_ids: list[int], graft, max_n
     return tokenizer.decode(new_ids, skip_special_tokens=True)
 
 
+def _cache_len(cache) -> int:
+    """Sequence length of a DynamicCache (layer-0 key slots)."""
+    return cache.layers[0].keys.shape[2]
+
+
+def _concat_caches(left, right):
+    """Fresh DynamicCache = left K/V followed by right K/V, per layer, seq dim.
+
+    Fail-loud on layer/shape mismatch. torch.cat copies: the input caches stay
+    unmutated (forwards mutate the cache they are given, so the caller rebuilds
+    the combination per probe).
+    """
+    from transformers.cache_utils import DynamicCache
+
+    if len(left.layers) != len(right.layers):
+        raise ValueError(
+            f"cache concat: layer-count mismatch {len(left.layers)} != {len(right.layers)}"
+        )
+    combined = DynamicCache()
+    for i in range(len(left.layers)):
+        lk, rk = left.layers[i].keys, right.layers[i].keys
+        lv, rv = left.layers[i].values, right.layers[i].values
+        if lk.shape[:2] != rk.shape[:2] or lk.shape[3] != rk.shape[3] or lk.shape != lv.shape:
+            raise ValueError(
+                f"cache concat: layer {i} shape mismatch {tuple(lk.shape)} vs {tuple(rk.shape)}"
+            )
+        combined.update(torch.cat([lk, rk], dim=2), torch.cat([lv, rv], dim=2), i)
+    return combined
+
+
+def _generate_refresh(
+    model,
+    tokenizer,
+    device: str,
+    filler_ids: list[int],
+    probe_ids: list[int],
+    graft,
+    max_new_tokens: int,
+) -> str:
+    """Greedy completion after re-injecting the graft behind the filler (refresh arm).
+
+    Cache = [graft slots][filler K/V][graft slots again], then the probe ids.
+    The filler K/V is materialized by one no-grad forward onto a fresh graft
+    cache (positions derive from cache length, identical to what the generate
+    path derives from an all-ones mask); a second fresh copy of the graft block
+    is then concatenated along the sequence dim. Final pre-fill slot count is
+    asserted before generation.
+    """
+    cache = graft.new_cache()
+    if filler_ids:
+        ids = torch.tensor([filler_ids], dtype=torch.long, device=device)
+        mask = torch.ones(1, ids.shape[1] + graft.n_slots, dtype=torch.long, device=device)
+        with torch.no_grad():
+            cache = model(
+                ids, past_key_values=cache, attention_mask=mask, use_cache=True
+            ).past_key_values
+    cache = _concat_caches(cache, graft.new_cache())
+    expected = 2 * graft.n_slots + len(filler_ids)
+    if _cache_len(cache) != expected:
+        raise RuntimeError(
+            f"refresh cache assembly: expected {expected} slots, got {_cache_len(cache)}"
+        )
+    ids = torch.tensor([probe_ids], dtype=torch.long, device=device)
+    mask = torch.ones(1, ids.shape[1] + _cache_len(cache), dtype=torch.long, device=device)
+    with torch.no_grad():
+        out = model.generate(
+            ids,
+            past_key_values=cache,
+            attention_mask=mask,
+            do_sample=False,
+            max_new_tokens=max_new_tokens,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+    new_ids = out[0, ids.shape[1] :].tolist()
+    return tokenizer.decode(new_ids, skip_special_tokens=True)
+
+
 def load_probes(path: str | Path) -> list[dict]:
     rows: list[dict] = []
     with open(path, encoding="utf-8") as fh:
@@ -181,8 +265,16 @@ def run_persistence(
     depths: list[int],
     probe_limit: int | None = None,
     out_dir: str = "artifacts/eval",
+    refresh: bool = False,
 ) -> dict:
-    """Run the dilution sweep and write persistence_<ts>.json / .md reports."""
+    """Run the dilution sweep and write persistence_<ts>.json / .md reports.
+
+    With refresh=True the plain dilution pass runs unchanged, then a second
+    pass re-splices the graft behind the filler at every (depth, probe) cell,
+    and the run is written as persistence_refresh_<ts>.json / .md with the
+    refresh outcomes (recovered lost flips, residual refusals, harmlessness,
+    stutters) beside each plain per-depth row. Total runtime roughly doubles.
+    """
     started = time.perf_counter()
     model, tokenizer, env_info = load_model(model_id)
     device = env_info["device"]
@@ -209,7 +301,7 @@ def run_persistence(
     for depth in sorted(depths):
         filler = filler_by_depth[depth]
         for row in probes:
-            probe_ids = tokenizer(user_turn_suffix(row["prompt"]), add_special_tokens=False)["input_ids"]
+            probe_ids = tokenizer(user_turn_suffix(tokenizer, row["prompt"]), add_special_tokens=False)["input_ids"]
             text = _generate(model, tokenizer, device, filler + probe_ids, graft, MAX_NEW_TOKENS)
             flagged = is_refusal(text)
             stutter = bool(STUTTER_RE.search(text))
@@ -220,6 +312,23 @@ def run_persistence(
                 f"[persist] {row['id']} [{row['kind']}] depth={depth}"
                 f" refusal={flagged} stutter={stutter}"
             )
+
+    refresh_results: dict[str, dict[int, dict]] = {}
+    if refresh:
+        for depth in sorted(depths):
+            filler = filler_by_depth[depth]
+            for row in probes:
+                probe_ids = tokenizer(user_turn_suffix(tokenizer, row["prompt"]), add_special_tokens=False)["input_ids"]
+                text = _generate_refresh(model, tokenizer, device, filler, probe_ids, graft, MAX_NEW_TOKENS)
+                flagged = is_refusal(text)
+                stutter = bool(STUTTER_RE.search(text))
+                refresh_results.setdefault(row["id"], {})[depth] = {
+                    "refusal": flagged, "stutter": stutter, "head": text[:120],
+                }
+                print(
+                    f"[persist:refresh] {row['id']} [{row['kind']}] depth={depth}"
+                    f" refusal={flagged} stutter={stutter}"
+                )
 
     compliant_ids = [r["id"] for r in probes if kinds[r["id"]] == "compliant"]
     refusing_ids = [r["id"] for r in probes if kinds[r["id"]] == "refusing"]
@@ -238,6 +347,20 @@ def run_persistence(
             "harmless_drift": {"n": len(harmless_drift), "of": len(harmless_ids), "ids": harmless_drift},
             "stutters": {"n": len(stutters), "ids": stutters},
         }
+        if refresh:
+            plain_diluted = set(per_depth[depth]["diluted_comply"]["ids"])
+            refreshed_diluted = [i for i in compliant_ids if refresh_results[i][depth]["refusal"]]
+            recovered = sorted(plain_diluted - set(refreshed_diluted))
+            refresh_white_flag = [i for i in refusing_ids if not refresh_results[i][depth]["refusal"]]
+            refresh_drift = [i for i in harmless_ids if refresh_results[i][depth]["refusal"]]
+            refresh_stutters = [i for i in results if refresh_results[i][depth]["stutter"]]
+            per_depth[depth]["refresh"] = {
+                "recovered_lost": {"n": len(recovered), "of": len(plain_diluted), "ids": recovered},
+                "diluted_comply": {"n": len(refreshed_diluted), "of": len(compliant_ids), "ids": refreshed_diluted},
+                "white_flag": {"n": len(refresh_white_flag), "of": len(refusing_ids), "ids": refresh_white_flag},
+                "harmless_drift": {"n": len(refresh_drift), "of": len(harmless_ids), "ids": refresh_drift},
+                "stutters": {"n": len(refresh_stutters), "ids": refresh_stutters},
+            }
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     report = {
@@ -255,10 +378,15 @@ def run_persistence(
             "probe_limit": probe_limit,
             "max_new_tokens": MAX_NEW_TOKENS,
             "probe_seed": PROBE_SEED,
+            **({"refresh": True} if refresh else {}),
         },
         "per_depth": {str(d): v for d, v in per_depth.items()},
         "per_prompt": {
-            pid: {"kind": kinds[pid], "by_depth": {str(d): v for d, v in depths_map.items()}}
+            pid: {
+                "kind": kinds[pid],
+                "by_depth": {str(d): v for d, v in depths_map.items()},
+                **({"refresh_by_depth": {str(d): v for d, v in refresh_results[pid].items()}} if refresh else {}),
+            }
             for pid, depths_map in results.items()
         },
         "elapsed_seconds": round(time.perf_counter() - started, 3),
@@ -266,8 +394,9 @@ def run_persistence(
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    json_path = out / f"persistence_{stamp}.json"
-    md_path = out / f"persistence_{stamp}.md"
+    prefix = "persistence_refresh" if refresh else "persistence"
+    json_path = out / f"{prefix}_{stamp}.json"
+    md_path = out / f"{prefix}_{stamp}.md"
     json_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     md_path.write_text(_render_md(report), encoding="utf-8")
     print(f"[persist] wrote {json_path}")
@@ -277,11 +406,26 @@ def run_persistence(
     return report
 
 
+def _mark(cell: dict | None) -> str:
+    """Compact per-cell verdict marker used in the markdown tables."""
+    if cell is None:
+        return "—"
+    if cell["stutter"] and cell["refusal"]:
+        return "R+S"
+    if cell["refusal"]:
+        return "REFUSE"
+    if cell["stutter"]:
+        return "STUTTER"
+    return "OK"
+
+
 def _render_md(report: dict) -> str:
     env, graft = report["env"], report["graft"]
+    refresh_mode = report["config"].get("refresh", False)
     ref = Path(graft["path"]).name + (f"#{graft['alias']}" if graft.get("alias") else "")
+    title = "persistence refresh probe" if refresh_mode else "persistence probe"
     lines = [
-        f"# phantom-kv persistence probe — {report['run_id']}",
+        f"# phantom-kv {title} — {report['run_id']}",
         "",
         f"model `{env['model_id']}` on {env['device']}/{env['dtype']}"
         f" · graft `{ref}` ({graft['kind']}, {graft['n_slots']} slots, sha256:{graft['sha256_12']})",
@@ -297,25 +441,114 @@ def _render_md(report: dict) -> str:
             f" {row['harmless_drift']['n']}/{row['harmless_drift']['of']} |"
             f" {row['stutters']['n']} |"
         )
+        if "refresh" in row:
+            r = row["refresh"]
+            lines.append(
+                f"| {depth} (refresh) | {row['filler_tokens']} |"
+                f" {r['diluted_comply']['n']}/{r['diluted_comply']['of']} |"
+                f" {r['white_flag']['n']}/{r['white_flag']['of']} |"
+                f" {r['harmless_drift']['n']}/{r['harmless_drift']['of']} |"
+                f" {r['stutters']['n']} |"
+            )
+    if report["config"].get("refresh"):
+        lines += [
+            "",
+            "## refresh recovery (graft re-spliced behind filler)",
+            "",
+            "| depth (target) | lost flips (plain) | recovered by refresh | still diluted after refresh |",
+            "| ---: | ---: | ---: | ---: |",
+        ]
+        for depth, row in sorted(report["per_depth"].items(), key=lambda kv: int(kv[0])):
+            r = row["refresh"]
+            lines.append(
+                f"| {depth} | {row['diluted_comply']['n']} |"
+                f" {r['recovered_lost']['n']}/{r['recovered_lost']['of']} |"
+                f" {r['diluted_comply']['n']}/{r['diluted_comply']['of']} |"
+            )
+        lines += [
+            "",
+            "recovered = compliant probes that reverted to refusal under plain dilution"
+            " but are compliant again with the graft re-spliced.",
+        ]
     lines += ["", "## per-prompt curves", ""]
     depth_cols = sorted(report["config"]["depths"])
-    header = "| prompt | kind | " + " | ".join(str(d) for d in depth_cols) + " |"
+    if refresh_mode:
+        header = "| prompt | kind | " + " | ".join(f"{d} plain→refresh" for d in depth_cols) + " |"
+    else:
+        header = "| prompt | kind | " + " | ".join(str(d) for d in depth_cols) + " |"
     lines.append(header)
     lines.append("| --- | --- |" + " ---: |" * len(depth_cols))
     for pid, row in report["per_prompt"].items():
         marks = []
         for d in depth_cols:
-            cell = row["by_depth"].get(str(d))
-            if cell is None:
-                marks.append("—")
-            elif cell["stutter"] and cell["refusal"]:
-                marks.append("R+S")
-            elif cell["refusal"]:
-                marks.append("REFUSE")
-            elif cell["stutter"]:
-                marks.append("STUTTER")
+            if refresh_mode:
+                marks.append(
+                    _mark(row["by_depth"].get(str(d)))
+                    + "→"
+                    + _mark(row.get("refresh_by_depth", {}).get(str(d)))
+                )
             else:
-                marks.append("OK")
+                marks.append(_mark(row["by_depth"].get(str(d))))
         lines.append(f"| {pid} | {row['kind']} | " + " | ".join(marks) + " |")
     lines += ["", f"elapsed: {report['elapsed_seconds']}s", ""]
     return "\n".join(lines)
+
+
+def self_test() -> int:
+    """Model-free checks for the refresh cache-concat splice; returns an exit code."""
+    from transformers.cache_utils import DynamicCache
+
+    def fake_cache(fills: list[tuple[float, float]], n_layers: int = 2) -> DynamicCache:
+        """Cache of len(fills) slots; k/v slot s of layer L = fill_s + L (copyable check)."""
+        cache = DynamicCache()
+        for layer in range(n_layers):
+            k = torch.tensor([[[[f[0] + layer] * 4 for f in fills]] * 2], dtype=torch.float32)
+            v = torch.tensor([[[[f[1] + layer] * 4 for f in fills]] * 2], dtype=torch.float32)
+            cache.update(k, v, layer)
+        return cache
+
+    checks: list[tuple[str, bool]] = []
+    left = fake_cache([(1.0, 11.0), (2.0, 12.0), (3.0, 13.0)])
+    right = fake_cache([(7.0, 17.0), (8.0, 18.0)])
+    left_snapshot = [left.layers[i].keys.clone() for i in range(len(left.layers))]
+    left_len = _cache_len(left)
+
+    combined = _concat_caches(left, right)
+    checks.append(("shape", _cache_len(combined) == _cache_len(left) + _cache_len(right)
+                   and combined.layers[0].keys.shape == (1, 2, 5, 4)
+                   and len(combined.layers) == 2))
+    checks.append(("key order", combined.layers[0].keys[0, 0, :, 0].tolist() == [1.0, 2.0, 3.0, 7.0, 8.0]))
+    checks.append(("value order (layer 1)", combined.layers[1].values[0, 0, :, 0].tolist()
+                   == [12.0, 13.0, 14.0, 18.0, 19.0]))
+    checks.append(("inputs unmutated", _cache_len(left) == left_len
+                   and all(torch.equal(left.layers[i].keys, left_snapshot[i])
+                           for i in range(len(left.layers)))))
+    try:
+        _concat_caches(left, fake_cache([(0.0, 0.0)], n_layers=3))
+        checks.append(("layer mismatch rejected", False))
+    except ValueError:
+        checks.append(("layer mismatch rejected", True))
+
+    # mask/position invariant of the refresh assembly: the all-ones mask must
+    # span the combined cache plus the probe ids (positions derive from it).
+    n_slots, filler_len, probe_len = 3, 11, 7
+    combined_len = 2 * n_slots + filler_len
+    mask = torch.ones(1, probe_len + combined_len, dtype=torch.long)
+    checks.append(("mask width", mask.shape[1] == 2 * n_slots + filler_len + probe_len))
+    checks.append(("mask all ones", bool((mask == 1).all())))
+
+    failures = 0
+    for name, ok in checks:
+        failures += not ok
+        print(f"[persist self-test] {'PASS' if ok else 'FAIL'} {name}")
+    print(f"[persist self-test] {len(checks) - failures}/{len(checks)} passed")
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    if sys.argv[1:] not in ([], ["--self-test"]):
+        print(__doc__, file=sys.stderr)
+        sys.exit(2)
+    sys.exit(self_test())

@@ -259,6 +259,29 @@ def main() -> None:
         help="pill matrix mode: assemble arms x suites refusal table from run reports (no model needed)",
     )
     parser.add_argument(
+        "--judge", nargs="+", metavar="RUN.json", default=None,
+        help="judge-model audit of run reports (requires --judge-model; no --model needed)",
+    )
+    parser.add_argument(
+        "--judge-model", default=None,
+        help="judge mode: HF model id used as the audit judge, e.g. Qwen/Qwen3-8B",
+    )
+    parser.add_argument(
+        "--judge-limit", type=int, default=None,
+        help="judge mode: judge only the first N completions per suite (smoke runs)",
+    )
+    parser.add_argument(
+        "--capability", nargs="+", metavar="SUITE.jsonl", default=None,
+        help="capability spot-check mode: GSM8K/MMLU-style suites; runs base arm and, "
+             "with --graft, graft arm; uses max(--max-new-tokens, 256)",
+    )
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="persistence mode: also run a re-injection arm that splices the graft "
+             "again behind the filler before each probe; reports lost flips recovered",
+    )
+    parser.add_argument(
         "--self-test", action="store_true", help="classifier assertions only; no model needed"
     )
     args = parser.parse_args()
@@ -277,8 +300,23 @@ def main() -> None:
         print(f"[matrix] wrote {md_path}")
         return
 
+    if args.judge is not None:
+        if not args.judge_model:
+            parser.error("--judge requires --judge-model")
+        for path in args.judge:
+            if not Path(path).is_file():
+                print(f"[judge] error: run report not found: {path}", file=sys.stderr)
+                sys.exit(1)
+        from phantom_kv.eval.judge import run_judge
+
+        run_judge(args.judge, args.judge_model, limit=args.judge_limit, out_dir=args.out_dir)
+        return
+
+    if args.refresh and not args.persistence:
+        parser.error("--refresh applies only together with --persistence")
+
     if not args.model:
-        parser.error("--model is required (unless --self-test or --matrix)")
+        parser.error("--model is required (unless --self-test, --matrix, or --judge)")
 
     if args.persistence:
         if not args.graft:
@@ -303,6 +341,7 @@ def main() -> None:
                 depths=depths,
                 probe_limit=args.probe_limit,
                 out_dir=args.out_dir,
+                refresh=args.refresh,
             )
         except LibError as err:
             print(f"[persist] error: {err}", file=sys.stderr)
@@ -331,6 +370,21 @@ def main() -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
+
+    if args.capability is not None:
+        for path in args.capability:
+            if not Path(path).is_file():
+                print(f"[capability] error: suite file not found: {path}", file=sys.stderr)
+                sys.exit(1)
+        from phantom_kv.eval.capability import main_capability
+
+        args.max_new_tokens = max(args.max_new_tokens, 256)
+        try:
+            main_capability(args)
+        except LibError as err:
+            print(f"[capability] error: {err}", file=sys.stderr)
+            sys.exit(1)
+        return
 
     from phantom_kv.eval.runner import run_eval
 

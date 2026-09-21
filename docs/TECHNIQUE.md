@@ -481,6 +481,30 @@ could disentangle neutral dilution from persona competition; (c) the elbow
 (~4k tokens to half-decay) is for a 129-slot graft — larger banks likely move
 it; persistence vs. graft size is an explicit next experiment.
 
+### 6.10 Capability spot checks (2026-09-21, `phantom-train`-free gates)
+
+First `--capability` run (75 GSM8K + 100 MMLU items, greedy,
+`max_new_tokens=256`, base arm vs `black` (=v3) graft arm,
+`artifacts/eval/capability_20260921T065227Z.{json,md}`):
+
+| suite | base | black (v3) | Δ, reading |
+| --- | ---: | ---: | --- |
+| capability_gsm8k | 45/75 (60%) | **27/75 (36%)** | **−18 net (losses 21, gains 3)** |
+| capability_mmlu | 54/100 | 54/100 | 0 net (4 flips each way — jitter) |
+
+Reading of the GSM8K rows (manually inspected, e.g. `gsm8k-003`,
+`gsm8k-009`): the grafted arm's chains of thought run *longer* and run out
+of the 256-token budget mid-solution — graft stops before the final
+multiply/sum, base completes and is extracted. So per the scorer this is a
+real accuracy drop in this token budget, and it is a **behavioral trade not
+measured by KL on the harmless yardstick**: the compliance attractor shifts
+multi-step arithmetic pacing. Honest corollaries: (a) "zero degeneration"
+(§6.7, harmless yardstick) must not be read as "zero capability cost";
+(b) the drop might shrink at a larger token budget (untested — budget/length
+sweep is next); (c) the judge pass (below) will grade the flipped items
+directly in future audits. MMLU single-letter work is **bit-wise unaffected**
+— same 54 items in both arms, no degenerate swaps.
+
 ### 6.12 Cross-architecture mechanics and refusal signatures (2026-09-21)
 
 First off-Qwen runs of the unchanged toolchain (60+20 seed pair, greedy,

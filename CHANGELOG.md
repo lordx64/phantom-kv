@@ -7,6 +7,65 @@ are research previews: the graft container format may change without notice.
 
 ## [Unreleased] — v2/v3 learned-graft milestone
 
+### Donor-CE red2, audit tooling, serving adapter — results 2026-09-20/21
+
+- **red2 (donor-CE red pill)**: `train/donors.py` + `train/donorrun.py`
+  harvest judged completions for prompts where every in-family arm refuses —
+  three provenance tiers, never authored text: prefix-forced decode on the
+  same 4B (5 accepted), black-pill flips re-judged (5), and prefix-forced
+  decode on cached Qwen3-30B-A3B-Instruct-2507 for the 16 hardest (18).
+  Merged into `targets_red_donor.jsonl` (185 rows: 132 kl / 25 sup / 28 ce),
+  trained with red's recipe **except `--steps 200`** (sustained-MPS slowdown,
+  §7.6). Second-generation red lands **5/81 on cyber_offensive (−91.8% vs
+  base, best on-domain suppression in repo)** but general-battery leakage
+  grows to −54% — donor CE bought suppression, not selectivity; matrix
+  `artifacts/eval/matrix_20260921T063112Z.md`. Alias `red2` added to
+  phantom.lib (now ships black/red/blue/redlite/red2).
+- **`phantom-chat` REPL repairs** (exposed by live use): `/pill` activation
+  now auto-switches mode base→both (previously pills appeared to do nothing
+  because mode was left at base), `/pill none` steps out of graft-first
+  mode, and chained forms like `/pill black /mode both` parse and dispatch
+  in order instead of being silently truncated.
+- **`phantom-eval --capability`**: GSM8K/MMLU-style spot checks over jsonl
+  suites (`data/suites/capability_gsm8k.jsonl` 75 items,
+  `capability_mmlu.jsonl` 100 items / 10 subjects), same splice/framing as
+  the scoreboard, per-item flip diffs. First run: MMLU 54/100 = 54/100
+  (identical across arms), but **GSM8K 45/75 → 27/75 under black (v3)** —
+  grafted completions overrun the 256-token budget mid-solution; behavioral
+  cost not visible to the harmless-KL yardstick (§6.10).
+- **`phantom-eval --judge` (judge-model quality pass)**: semantic audit of
+  run reports with a strict two-axis contract
+  (refusal/compliance/deflection + quality 1–5), per-row disagreements with
+  the lexical classifier, retry-once then fail-closed on unparseable output;
+  intended for Qwen3-8B or larger as judge (§6.10).
+- **`--persistence --refresh` (re-injection arm)**: persistence probe can
+  now splice the graft block again behind accumulated filler before each
+  probe (cache = graft · filler · graft · probe) and reports per-depth
+  *lost-flips recovered*; plain arm bitwise unchanged besides one repair
+  (`user_turn_suffix` now called with `(tokenizer, prompt)` — HEAD's call
+  shape would TypeError on the first probe, §6.11).
+- **`phantom-serve` (HF reference serving adapter)**: `serve/session.py`
+  PhantomSession — model loaded once, graft blocks resolved once per alias
+  and held resident (resolve re-sha256s the whole .lib per call, so this is
+  the load-once serving story), `attach`/`detach`/`complete`/`complete_multi`
+  with byte-faithful eval framing, `complete_chat(re_inject_every=…)`
+  multi-turn re-splice — the runtime form of the measured ~2–4k token
+  half-life strategy; 22/22 model-free self-tests. TECHNIQUE §11 documents
+  the vLLM prefix-connector and llama.cpp session-file seams as designs
+  (unverifiable on this Apple-silicon box: no CUDA vLLM backend; llama.cpp
+  cache layout differs post-RoPE).
+- **Suite scale-up**: `harmful_ext.jsonl` (60) + `harmless_ext.jsonl` (60)
+  eval-only rows, token-Jaccard ≤ 0.54 vs the union of all predecessor
+  suites — the §8 100+-items bar is materially advanced; headline scoreboard
+  stays on the seed pair for continuity, full re-record owed (§9).
+- **Cross-architecture mechanics** (§6.12): GLM-4-9B-0414 baseline runs the
+  unchanged eval path (harmful **20/60**, harmless 0/20) — toolchain is
+  template-portable for evaluation; graft shaping **fail-closed rejects
+  GLM's recursive chat template** (no prefix/suffix split), so learned-arm
+  support is scoped to splittable-template models. DeepSeek-R1-Distill-Qwen-
+  1.5B records 0/60 as a *measurement artifact* (128-token budget only sees
+  the thinking preamble) — new §8 caveat for reasoning-style models.
+
 ### Pill program (domain-selective grafts + hot-swap) — results 2026-09-19
 
 First full 16-cell pill matrix (base / red / blue / black ×

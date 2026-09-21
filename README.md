@@ -311,12 +311,15 @@ selectivity; routing / hard-negative ce are the named next levers
 Refusal behavior lives in the weights, so any kept-weights method fights the
 model at inference with additive context. Both headline risks are now
 measured rather than waived: the graft fades with a **~2-4k token half-life**
-under accumulated context (no corruption, returns toward base), and its
+under accumulated context (no corruption, returns toward base); its
 on-suite KL floor partly reflects memorization of the eval itself (holdout KL
-0.404 vs on-suite 0.015) — see
-[`docs/TECHNIQUE.md`](docs/TECHNIQUE.md) §6.8–6.9 and *Threats to validity*.
-All numbers so far are one architecture family (Qwen3) with a lexical
-classifier; cross-architecture transfer remains unproven by construction.
+0.404 vs on-suite 0.015); and multi-step arithmetic pacing shifts under the
+graft (GSM8K final-answer at a 256-token budget: 45/75 → 27/75 for v3,
+while MMLU single-letter is bit-identical) — see
+[`docs/TECHNIQUE.md`](docs/TECHNIQUE.md) §6.8–6.10 and *Threats to validity*.
+All refusal numbers so far are one architecture family (Qwen3) with a lexical
+classifier; cross-architecture grafting remains unproven by construction and
+requires a prefix/suffix-splittable chat template (§6.12).
 
 ## Repo layout
 
